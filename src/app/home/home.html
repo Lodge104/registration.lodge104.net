@@ -1,0 +1,23 @@
+<main class="card">
+  <h1>Lodge 104 Registration</h1>
+  <p>Angular + AWS Amplify Gen2 starter. Call the sample Lambda function below.</p>
+
+  <form (ngSubmit)="callLambda()">
+    <input
+      name="name"
+      placeholder="Your name"
+      [ngModel]="name()"
+      (ngModelChange)="name.set($event)"
+    />
+    <button type="submit" [disabled]="loading()">
+      {{ loading() ? 'Calling…' : 'Say hello' }}
+    </button>
+  </form>
+
+  @if (message()) {
+    <p class="result">{{ message() }}</p>
+  }
+  @if (error()) {
+    <p class="error">{{ error() }}</p>
+  }
+</main>
