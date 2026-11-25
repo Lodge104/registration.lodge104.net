@@ -1,22 +1,62 @@
 import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
-import { sayHello } from '../functions/say-hello/resource';
+import { registrationApi } from '../functions/registration-api/resource';
 
 /**
  * Data / API layer (AWS AppSync).
  *
- * Lambda functions are exposed to the Angular app as custom queries/mutations
- * that use the Lambda as the resolver. The frontend calls them with the
- * Amplify Data client: `client.queries.sayHello({ name: '...' })`.
+ * No Amplify-managed tables: both operations are custom queries/mutations
+ * resolved by the registration-api Lambda, which reads the existing
+ * lodge104-member_data and lodge104-keys DynamoDB tables.
  *
- * Since this app has no authentication, every operation uses
- * `allow.publicApiKey()`.
+ * The app has no authentication, so every operation uses `allow.publicApiKey()`.
  */
 const schema = a.schema({
-  sayHello: a
+  LookupStatus: a.enum(['FOUND', 'NOT_FOUND', 'AMBIGUOUS']),
+  PortalAction: a.enum([
+    'ACCOUNT_ACTIVE',
+    'CREATE_ACCOUNT',
+    'RESEND_INVITE',
+    'UNDER_AGE',
+    'UNKNOWN',
+  ]),
+
+  LookupResult: a.customType({
+    status: a.ref('LookupStatus').required(),
+    action: a.ref('PortalAction'),
+    firstName: a.string(),
+    email: a.string(),
+    lookupToken: a.string(),
+  }),
+
+  InviteResult: a.customType({
+    success: a.boolean().required(),
+    message: a.string().required(),
+    email: a.string(),
+    expiresAt: a.string(),
+  }),
+
+  /** Find a member by BSA ID, or by first + last name and birthdate (YYYY-MM-DD). */
+  lookupMember: a
     .query()
-    .arguments({ name: a.string() })
-    .returns(a.string())
-    .handler(a.handler.function(sayHello))
+    .arguments({
+      bsaId: a.string(),
+      firstName: a.string(),
+      lastName: a.string(),
+      birthDate: a.string(),
+    })
+    .returns(a.ref('LookupResult'))
+    .handler(a.handler.function(registrationApi))
+    .authorization((allow) => [allow.publicApiKey()]),
+
+  /** Create a LodgeMaster portal account, or resend its invitation, for a looked-up member. */
+  sendPortalInvite: a
+    .mutation()
+    .arguments({
+      lookupToken: a.string().required(),
+      email: a.string().required(),
+    })
+    .returns(a.ref('InviteResult'))
+    .handler(a.handler.function(registrationApi))
     .authorization((allow) => [allow.publicApiKey()]),
 });
 
