@@ -3,8 +3,8 @@
 </h2>
 
 <p class="mb-6">
-  Please provide some information so we can identify you. You may provide your BSA ID or name and
-  birthdate.
+  Please provide some information so we can identify you. You may provide your Scouting Member ID or
+  name and birthdate.
 </p>
 
 @if (duesPending()) {
@@ -24,7 +24,7 @@
 }
 
 <div class="grid gap-6 md:grid-cols-2">
-  <!-- Option 1: BSA ID -->
+  <!-- Option 1: Scouting Member ID -->
   <form
     class="card border-base-300 bg-base-200 border"
     [formGroup]="bsaIdForm"
@@ -32,27 +32,27 @@
     novalidate
   >
     <div class="card-body gap-4">
-      <p class="text-base-content/60 text-center text-[30px] leading-tight">BSA ID Number</p>
+      <p class="text-base-content/60 text-center text-[30px] leading-tight">Scouting Member ID</p>
 
       <div>
-        <label for="bsaID" class="mb-1 block font-bold">BSA Person ID Number</label>
+        <label for="bsaID" class="mb-1 block font-bold">Scouting Member ID Number</label>
         <input
           id="bsaID"
           type="text"
           inputmode="numeric"
           autocomplete="off"
           formControlName="bsaID"
-          placeholder="Enter your BSA ID Number"
+          placeholder="Enter your Scouting Member ID"
           class="input w-full"
           [class.input-error]="invalid('bsaIdForm', 'bsaID')"
           [attr.aria-invalid]="invalid('bsaIdForm', 'bsaID')"
           aria-describedby="bsaID-help"
         />
         @if (invalid('bsaIdForm', 'bsaID')) {
-          <p class="text-error mt-1">Please enter your BSA ID number (digits only).</p>
+          <p class="text-error mt-1">Please enter your Scouting Member ID (digits only).</p>
         }
         <p id="bsaID-help" class="text-base-content/60 mt-1">
-          Your BSA Person ID can be found on your Boy Scouts of America registration card.
+          Your Scouting Member ID can be found on your Scouting America membership card.
         </p>
       </div>
 
@@ -167,7 +167,7 @@
         </h3>
         <p class="py-4">
           {{ member()?.firstName ? member()?.firstName + ', we' : 'We' }} found your record, and it
-          shows you already have an active OA LodgeMaster portal account. Were you aware of that?
+          shows you already have an active OA Member portal account. Were you aware of that?
         </p>
         <div class="modal-action">
           <button type="button" class="btn btn-outline btn-secondary" (click)="answerAware(false)">
@@ -191,7 +191,7 @@
           }}
         </h3>
         <p class="py-4">
-          We'll email you instructions to finish setting up your OA LodgeMaster portal account.
+          We'll email you instructions to finish setting up your OA Member portal account.
           Confirm the email address below, or change it.
         </p>
 

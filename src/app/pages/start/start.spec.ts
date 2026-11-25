@@ -84,7 +84,7 @@ describe('Start', () => {
     expect(years.at(-1)).toBe('1927');
   });
 
-  it('validates an empty BSA ID without calling the API', async () => {
+  it('validates an empty Scouting Member ID without calling the API', async () => {
     const { el, settle } = await setup();
     el.querySelectorAll('form')[0].dispatchEvent(new Event('submit'));
     await settle();
@@ -225,7 +225,7 @@ describe('Start', () => {
       expect(modal).toContain('2025');
     });
 
-    it('opens the dues link in a new tab, then reloads with the BSA ID saved', async () => {
+    it('opens the dues link in a new tab, then reloads with the member ID saved', async () => {
       lookupMember.mockResolvedValue(behind());
       requestDuesLink.mockResolvedValue({
         success: true,
@@ -288,7 +288,7 @@ describe('Start', () => {
       expect(el.querySelector('.modal')?.textContent).toContain('already up to date');
     });
 
-    it('after reload, re-fills the BSA ID and shows the check-again box', async () => {
+    it('after reload, re-fills the member ID and shows the check-again box', async () => {
       sessionStorage.setItem(
         DUES_PENDING_KEY,
         JSON.stringify({ bsaId: '1234567', at: Date.now() }),
