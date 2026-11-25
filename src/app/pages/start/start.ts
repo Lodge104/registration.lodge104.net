@@ -19,7 +19,16 @@ export const PORTAL_URL = 'https://portal.oa-scouting.org/';
 export const SUPPORT_URL = 'https://support.lodge104.net';
 export const CONTACT_EMAIL = 'registration@lodge104.net';
 
-type Dialog = 'active' | 'invite' | 'done';
+/**
+ * sessionStorage key used to re-fill the page after opening the dues payment
+ * tab. Kept out of the URL so the BSA ID doesn't end up in browser history or
+ * server logs. Cleared once read.
+ */
+export const DUES_PENDING_KEY = 'registration.duesPending';
+/** Ignore a stale pending-dues entry older than this. */
+const DUES_PENDING_TTL_MS = 24 * 60 * 60 * 1000;
+
+type Dialog = 'active' | 'invite' | 'done' | 'dues';
 
 @Component({
   selector: 'app-start',
@@ -70,6 +79,23 @@ export class Start {
   protected readonly inviteError = signal<string | null>(null);
   protected readonly sentTo = signal<string | null>(null);
 
+  protected readonly duesBusy = signal(false);
+  protected readonly duesError = signal<string | null>(null);
+  /** Shown when the payment tab could not be opened (e.g. pop-up blocked). */
+  protected readonly duesLink = signal<string | null>(null);
+  /** Info box after returning from the dues payment step. */
+  protected readonly duesPending = signal(false);
+  /** BSA ID returned with the dues link (also set when looked up by name). */
+  private duesBsaId: string | null = null;
+
+  constructor() {
+    const pending = readDuesPending();
+    if (pending) {
+      this.bsaIdForm.setValue({ bsaID: pending.bsaId });
+      this.duesPending.set(true);
+    }
+  }
+
   protected async verifyBsaId(): Promise<void> {
     this.bsaIdSubmitted.set(true);
     if (this.bsaIdForm.invalid) return;
@@ -113,9 +139,15 @@ export class Start {
           this.dialog.set('invite');
           break;
         case 'UNDER_AGE':
-          this.notice.set(
-            `Online portal accounts are available to members age 13 and older. Please email ${CONTACT_EMAIL} if you have questions.`,
-          );
+          if (result.duesCurrent === false) {
+            this.duesError.set(null);
+            this.duesLink.set(null);
+            this.dialog.set('dues');
+          } else {
+            this.notice.set(
+              `Online portal accounts are available to members age 13 and older. Please email ${CONTACT_EMAIL} if you have questions.`,
+            );
+          }
           break;
         default:
           this.notice.set(
@@ -166,6 +198,77 @@ export class Start {
     this.dialog.set(null);
   }
 
+  /**
+   * Opens the member's LodgeMaster dues payment link in a new tab, then
+   * reloads this page with the BSA ID filled in and a "check again" notice.
+   *
+   * The tab is opened synchronously on click (before the API call) so
+   * pop-up blockers allow it; it is pointed at the link once it arrives.
+   */
+  protected async payDues(): Promise<void> {
+    const token = this.member()?.lookupToken;
+    if (!token) return;
+
+    const tab = this.openTab();
+    this.duesError.set(null);
+    this.duesBusy.set(true);
+    try {
+      const result = await this.api.requestDuesLink(token);
+      if (!result.success || !result.link) {
+        tab?.close();
+        this.duesError.set(result.message);
+        return;
+      }
+      this.duesBsaId = result.bsaId;
+
+      if (tab && !tab.closed) {
+        tab.opener = null;
+        tab.location.href = result.link;
+      } else {
+        // Pop-up blocked: let the member open it themselves.
+        this.duesLink.set(result.link);
+        return;
+      }
+
+      this.reloadWithDuesPending();
+    } catch (err) {
+      console.error('requestDuesLink failed', err);
+      tab?.close();
+      this.duesError.set(
+        `We could not get your dues payment link right now. Please try again, or email ${CONTACT_EMAIL}.`,
+      );
+    } finally {
+      this.duesBusy.set(false);
+    }
+  }
+
+  /** After opening the link manually (pop-up blocked), refresh this page. */
+  protected continueAfterDuesLink(): void {
+    this.reloadWithDuesPending();
+  }
+
+  private reloadWithDuesPending(): void {
+    const bsaId = this.duesBsaId ?? this.bsaIdForm.getRawValue().bsaID.trim();
+    if (/^\d{1,12}$/.test(bsaId)) {
+      try {
+        sessionStorage.setItem(DUES_PENDING_KEY, JSON.stringify({ bsaId, at: Date.now() }));
+      } catch {
+        // Storage unavailable (private mode): the page still reloads, just empty.
+      }
+    }
+    this.reload();
+  }
+
+  /** Isolated so tests can stub reloading. */
+  protected reload(): void {
+    window.location.reload();
+  }
+
+  /** Isolated so tests can stub tab opening. */
+  protected openTab(): Window | null {
+    return window.open('', '_blank');
+  }
+
   /** Isolated so tests can stub navigation. */
   protected redirect(url: string): void {
     window.location.assign(url);
@@ -176,5 +279,20 @@ export class Start {
     const submitted = form === 'bsaIdForm' ? this.bsaIdSubmitted() : this.nameSubmitted();
     const ctrl = group.get(control);
     return !!ctrl && ctrl.invalid && (submitted || ctrl.touched);
+  }
+}
+
+/** Reads and clears the pending-dues entry left before a reload. */
+function readDuesPending(): { bsaId: string } | null {
+  try {
+    const raw = sessionStorage.getItem(DUES_PENDING_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(DUES_PENDING_KEY);
+    const { bsaId, at } = JSON.parse(raw) as { bsaId?: unknown; at?: unknown };
+    if (typeof bsaId !== 'string' || !/^\d{1,12}$/.test(bsaId)) return null;
+    if (typeof at !== 'number' || Date.now() - at > DUES_PENDING_TTL_MS) return null;
+    return { bsaId };
+  } catch {
+    return null;
   }
 }

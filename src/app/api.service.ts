@@ -12,6 +12,17 @@ export interface MemberLookup {
   firstName: string | null;
   email: string | null;
   lookupToken: string | null;
+  /** Set for under-13 members only. */
+  duesYear?: number | null;
+  requiredDuesYear?: number | null;
+  duesCurrent?: boolean | null;
+}
+
+export interface DuesLinkResult {
+  success: boolean;
+  message: string;
+  link: string | null;
+  bsaId: string | null;
 }
 
 export interface InviteResult {
@@ -52,6 +63,12 @@ export class ApiService {
     const { data, errors } = await this.client.mutations.sendPortalInvite({ lookupToken, email });
     if (errors?.length || !data) throw new Error(describe(errors));
     return data as InviteResult;
+  }
+
+  async requestDuesLink(lookupToken: string): Promise<DuesLinkResult> {
+    const { data, errors } = await this.client.queries.requestDuesLink({ lookupToken });
+    if (errors?.length || !data) throw new Error(describe(errors));
+    return data as DuesLinkResult;
   }
 }
 

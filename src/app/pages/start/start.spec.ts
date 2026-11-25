@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { ApiService, type InviteResult, type MemberLookup } from '../../api.service';
-import { Start } from './start';
+import { DUES_PENDING_KEY, Start } from './start';
 
 const found = (over: Partial<MemberLookup> = {}): MemberLookup => ({
   status: 'FOUND',
@@ -14,13 +14,21 @@ const found = (over: Partial<MemberLookup> = {}): MemberLookup => ({
 describe('Start', () => {
   const lookupMember = vi.fn<ApiService['lookupMember']>();
   const sendPortalInvite = vi.fn<ApiService['sendPortalInvite']>();
+  const requestDuesLink = vi.fn<ApiService['requestDuesLink']>();
 
   beforeEach(async () => {
     lookupMember.mockReset();
     sendPortalInvite.mockReset();
+    requestDuesLink.mockReset();
+    sessionStorage.clear();
     await TestBed.configureTestingModule({
       imports: [Start],
-      providers: [{ provide: ApiService, useValue: { lookupMember, sendPortalInvite } }],
+      providers: [
+        {
+          provide: ApiService,
+          useValue: { lookupMember, sendPortalInvite, requestDuesLink },
+        },
+      ],
     }).compileComponents();
   });
 
@@ -28,9 +36,17 @@ describe('Start', () => {
     const fixture = TestBed.createComponent(Start);
     await fixture.whenStable();
     const el = fixture.nativeElement as HTMLElement;
-    const redirect = vi
-      .spyOn(fixture.componentInstance as unknown as { redirect(u: string): void }, 'redirect')
-      .mockImplementation(() => undefined);
+    const component = fixture.componentInstance as unknown as {
+      redirect(u: string): void;
+      reload(): void;
+      openTab(): Window | null;
+    };
+    const redirect = vi.spyOn(component, 'redirect').mockImplementation(() => undefined);
+    const reload = vi.spyOn(component, 'reload').mockImplementation(() => undefined);
+    const fakeTab = { closed: false, opener: {}, location: { href: '' }, close: vi.fn() };
+    const openTab = vi
+      .spyOn(component, 'openTab')
+      .mockImplementation(() => fakeTab as unknown as Window);
     const settle = async () => {
       await fixture.whenStable();
       fixture.detectChanges();
@@ -46,7 +62,7 @@ describe('Start', () => {
       el.querySelectorAll('form')[0].dispatchEvent(new Event('submit'));
       await settle();
     };
-    return { fixture, el, redirect, settle, type, submitBsa };
+    return { fixture, el, redirect, reload, openTab, fakeTab, settle, type, submitBsa };
   }
 
   it('renders both identification options', async () => {
@@ -181,6 +197,118 @@ describe('Start', () => {
     await submitBsa();
     expect(el.querySelector('[role=alert]')?.textContent).toContain('13');
     expect(el.querySelector('.modal')).toBeNull();
+  });
+
+  describe('under 13 dues', () => {
+    const behind = () =>
+      found({ action: 'UNDER_AGE', duesYear: 2025, requiredDuesYear: 2027, duesCurrent: false });
+    const pay = (el: HTMLElement) =>
+      [...el.querySelectorAll<HTMLButtonElement>('.modal button')]
+        .find((b) => b.textContent?.includes('Pay dues'))!
+        .click();
+
+    it('shows the under-13 message (no popup) when dues are current', async () => {
+      lookupMember.mockResolvedValue(found({ action: 'UNDER_AGE', duesCurrent: true }));
+      const { el, submitBsa } = await setup();
+      await submitBsa();
+      expect(el.querySelector('.modal')).toBeNull();
+      expect(el.querySelector('[role=alert]')?.textContent).toContain('13');
+    });
+
+    it('shows the dues popup when dues are behind', async () => {
+      lookupMember.mockResolvedValue(behind());
+      const { el, submitBsa } = await setup();
+      await submitBsa();
+      const modal = el.querySelector('.modal')?.textContent ?? '';
+      expect(modal).toContain('pay your lodge');
+      expect(modal).toContain('2027');
+      expect(modal).toContain('2025');
+    });
+
+    it('opens the dues link in a new tab, then reloads with the BSA ID saved', async () => {
+      lookupMember.mockResolvedValue(behind());
+      requestDuesLink.mockResolvedValue({
+        success: true,
+        message: 'ok',
+        link: 'https://members.oa-scouting.org/link/member?token=abc',
+        bsaId: '1234567',
+      });
+      const { el, submitBsa, settle, openTab, fakeTab, reload } = await setup();
+      await submitBsa();
+      pay(el);
+      await settle();
+
+      expect(openTab).toHaveBeenCalledTimes(1);
+      expect(requestDuesLink).toHaveBeenCalledWith('token');
+      expect(fakeTab.location.href).toBe('https://members.oa-scouting.org/link/member?token=abc');
+      expect(fakeTab.opener).toBeNull();
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(sessionStorage.getItem(DUES_PENDING_KEY)!).bsaId).toBe('1234567');
+    });
+
+    it('offers a manual link when the browser blocks the new tab', async () => {
+      lookupMember.mockResolvedValue(behind());
+      requestDuesLink.mockResolvedValue({
+        success: true,
+        message: 'ok',
+        link: 'https://members.oa-scouting.org/link/member?token=abc',
+        bsaId: '1234567',
+      });
+      const { el, submitBsa, settle, openTab, reload } = await setup();
+      openTab.mockReturnValue(null);
+      await submitBsa();
+      pay(el);
+      await settle();
+
+      const link = el.querySelector<HTMLAnchorElement>('.modal a[target=_blank]')!;
+      expect(link.href).toBe('https://members.oa-scouting.org/link/member?token=abc');
+      expect(reload).not.toHaveBeenCalled();
+
+      [...el.querySelectorAll<HTMLButtonElement>('.modal button')]
+        .find((b) => b.textContent?.includes('Done'))!
+        .click();
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it('closes the blank tab and shows the message when no link is returned', async () => {
+      lookupMember.mockResolvedValue(behind());
+      requestDuesLink.mockResolvedValue({
+        success: false,
+        message: 'Your dues are already up to date.',
+        link: null,
+        bsaId: null,
+      });
+      const { el, submitBsa, settle, fakeTab, reload } = await setup();
+      await submitBsa();
+      pay(el);
+      await settle();
+
+      expect(fakeTab.close).toHaveBeenCalled();
+      expect(reload).not.toHaveBeenCalled();
+      expect(el.querySelector('.modal')?.textContent).toContain('already up to date');
+    });
+
+    it('after reload, re-fills the BSA ID and shows the check-again box', async () => {
+      sessionStorage.setItem(
+        DUES_PENDING_KEY,
+        JSON.stringify({ bsaId: '1234567', at: Date.now() }),
+      );
+      const { el } = await setup();
+
+      expect(el.querySelector<HTMLInputElement>('#bsaID')!.value).toBe('1234567');
+      expect(el.querySelector('[role=status]')?.textContent).toContain('15 minutes');
+      expect(sessionStorage.getItem(DUES_PENDING_KEY)).toBeNull();
+    });
+
+    it('ignores a stale or malformed pending entry', async () => {
+      sessionStorage.setItem(
+        DUES_PENDING_KEY,
+        JSON.stringify({ bsaId: '1234567', at: Date.now() - 2 * 24 * 60 * 60 * 1000 }),
+      );
+      const { el } = await setup();
+      expect(el.querySelector<HTMLInputElement>('#bsaID')!.value).toBe('');
+      expect(el.querySelector('[role=status]')).toBeNull();
+    });
   });
 
   it('shows a friendly error when the lookup request fails', async () => {

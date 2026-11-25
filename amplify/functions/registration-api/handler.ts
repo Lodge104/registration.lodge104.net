@@ -32,6 +32,8 @@ const {
   KEYS_TABLE_NAME = 'lodge104-keys',
   LODGEMASTER_BASE_URL = 'https://lodgemaster-client.oa-scouting.org',
   MIN_PORTAL_AGE = '13',
+  DUES_TIMEZONE = 'America/New_York',
+  DUES_LINK_ORIGIN = 'https://members.oa-scouting.org',
 } = process.env;
 
 const XSRF_TOKEN_COOKIE = 'XSRF-TOKEN';
@@ -52,11 +54,7 @@ const PORTAL_ACCOUNT = {
 
 export type LookupStatus = 'FOUND' | 'NOT_FOUND' | 'AMBIGUOUS';
 export type PortalAction =
-  | 'ACCOUNT_ACTIVE'
-  | 'CREATE_ACCOUNT'
-  | 'RESEND_INVITE'
-  | 'UNDER_AGE'
-  | 'UNKNOWN';
+  'ACCOUNT_ACTIVE' | 'CREATE_ACCOUNT' | 'RESEND_INVITE' | 'UNDER_AGE' | 'UNKNOWN';
 
 export interface LookupResult {
   status: LookupStatus;
@@ -64,6 +62,20 @@ export interface LookupResult {
   firstName: string | null;
   email: string | null;
   lookupToken: string | null;
+  /** Under-13 members only: the member's most recent DuesYear. */
+  duesYear: number | null;
+  /** Under-13 members only: the dues year that counts as current today. */
+  requiredDuesYear: number | null;
+  /** Under-13 members only: whether duesYear >= requiredDuesYear. */
+  duesCurrent: boolean | null;
+}
+
+export interface DuesLinkResult {
+  success: boolean;
+  message: string;
+  link: string | null;
+  /** Returned so the page can be re-filled after the payment tab opens. */
+  bsaId: string | null;
 }
 
 export interface InviteResult {
@@ -96,7 +108,11 @@ interface InviteArgs {
   email: string;
 }
 
-type FieldName = 'lookupMember' | 'sendPortalInvite';
+interface DuesLinkArgs {
+  lookupToken: string;
+}
+
+type FieldName = 'lookupMember' | 'sendPortalInvite' | 'requestDuesLink';
 
 /**
  * Amplify Data's generated resolver invokes the function with a flat payload
@@ -115,8 +131,8 @@ interface ResolverEvent<TArgs> {
 // ---------------------------------------------------------------------------
 
 export const handler = async (
-  event: ResolverEvent<LookupArgs | InviteArgs>,
-): Promise<LookupResult | InviteResult> => {
+  event: ResolverEvent<LookupArgs | InviteArgs | DuesLinkArgs>,
+): Promise<LookupResult | InviteResult | DuesLinkResult> => {
   const field = (event.fieldName ?? event.info?.fieldName) as FieldName | undefined;
   const args = event.arguments ?? {};
   switch (field) {
@@ -124,6 +140,8 @@ export const handler = async (
       return lookupMember(args as LookupArgs);
     case 'sendPortalInvite':
       return sendPortalInvite(args as InviteArgs);
+    case 'requestDuesLink':
+      return requestDuesLink(args as DuesLinkArgs);
     default:
       throw new Error(`Unsupported field: ${String(field)}`);
   }
@@ -142,14 +160,44 @@ export async function lookupMember(args: LookupArgs, now = new Date()): Promise<
 
   const [bsaPersonId, records] = [...people.entries()][0];
   const member = latestRecord(records);
+  const action = portalAction(member, now);
+  const dues = action === 'UNDER_AGE' ? duesStatus(member, now) : null;
 
   return {
     status: 'FOUND',
-    action: portalAction(member, now),
+    action,
     firstName: clean(member.FirstName) || null,
     email: clean(member.EmailPrimaryAddress) || null,
     lookupToken: encodeLookupToken(bsaPersonId, now),
+    duesYear: dues?.duesYear ?? null,
+    requiredDuesYear: dues?.requiredDuesYear ?? null,
+    duesCurrent: dues?.current ?? null,
   };
+}
+
+/**
+ * Dues are "current" when the member's latest DuesYear is at least the
+ * required year: next year from Nov 1 through Dec 31 (when the lodge starts
+ * collecting the following year's dues), otherwise this year.
+ */
+export function requiredDuesYear(now: Date, timeZone = DUES_TIMEZONE): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: 'numeric',
+  }).formatToParts(now);
+  const year = Number(parts.find((p) => p.type === 'year')?.value);
+  const month = Number(parts.find((p) => p.type === 'month')?.value);
+  return month >= 11 ? year + 1 : year;
+}
+
+export function duesStatus(
+  member: Pick<MemberRecord, 'DuesYear'>,
+  now: Date,
+): { duesYear: number; requiredDuesYear: number; current: boolean } {
+  const required = requiredDuesYear(now);
+  const duesYear = Number(member.DuesYear) || 0;
+  return { duesYear, requiredDuesYear: required, current: duesYear >= required };
 }
 
 async function findMembers(args: LookupArgs): Promise<MemberRecord[]> {
@@ -212,7 +260,10 @@ async function scanByNameAndBirthDate(
       }),
     );
     for (const item of (page.Items ?? []) as MemberRecord[]) {
-      if (normalizeName(item.FirstName) === firstName && normalizeName(item.LastName) === lastName) {
+      if (
+        normalizeName(item.FirstName) === firstName &&
+        normalizeName(item.LastName) === lastName
+      ) {
         items.push(item);
       }
     }
@@ -269,7 +320,16 @@ export function ageOn(dateOfBirth: string | undefined, now: Date): number | null
 }
 
 function notFound(status: Exclude<LookupStatus, 'FOUND'>): LookupResult {
-  return { status, action: null, firstName: null, email: null, lookupToken: null };
+  return {
+    status,
+    action: null,
+    firstName: null,
+    email: null,
+    lookupToken: null,
+    duesYear: null,
+    requiredDuesYear: null,
+    duesCurrent: null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -303,7 +363,8 @@ export async function sendPortalInvite(args: InviteArgs, now = new Date()): Prom
     return failure('Your member record is missing a LodgeMaster ID.');
   }
 
-  const response = await callLodgeMaster(
+  const response = await callLodgeMaster<LodgeMasterInviteResponse>(
+    'POST',
     `/api/members/${encodeURIComponent(String(member.OalmId))}/account/${endpoint}`,
     { email },
   );
@@ -318,6 +379,56 @@ export async function sendPortalInvite(args: InviteArgs, now = new Date()): Prom
 
 function failure(message: string): InviteResult {
   return { success: false, message, email: null, expiresAt: null };
+}
+
+// ---------------------------------------------------------------------------
+// requestDuesLink
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the member's LodgeMaster dues-payment link. Only issued for the
+ * exact case the UI offers it (under 13 with dues not current), re-checked
+ * server-side, since the link is specific to that member.
+ */
+export async function requestDuesLink(
+  args: DuesLinkArgs,
+  now = new Date(),
+): Promise<DuesLinkResult> {
+  const duesFailure = (message: string): DuesLinkResult => ({
+    success: false,
+    message,
+    link: null,
+    bsaId: null,
+  });
+
+  const bsaPersonId = decodeLookupToken(args.lookupToken, now);
+  if (bsaPersonId === null) {
+    return duesFailure('Your session has expired. Please look yourself up again.');
+  }
+
+  const records = await queryByBsaId(bsaPersonId);
+  if (records.length === 0) {
+    return duesFailure('We could not find your member record. Please look yourself up again.');
+  }
+  const member = latestRecord(records);
+  if (portalAction(member, now) !== 'UNDER_AGE' || duesStatus(member, now).current) {
+    return duesFailure('Your dues are already up to date.');
+  }
+  if (!member.OalmId) {
+    return duesFailure('Your member record is missing a LodgeMaster ID.');
+  }
+
+  const response = await callLodgeMaster<{ link?: string }>(
+    'GET',
+    `/api/members/dues/${encodeURIComponent(String(member.OalmId))}/memberdueslink`,
+  );
+  const link = response.link ?? '';
+  if (!link.startsWith(`${DUES_LINK_ORIGIN}/`)) {
+    console.error('Unexpected dues link from LodgeMaster', { hasLink: Boolean(link) });
+    throw new Error('LodgeMaster did not return a dues payment link. Please try again later.');
+  }
+
+  return { success: true, message: 'Dues link created', link, bsaId: String(bsaPersonId) };
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +484,11 @@ function mergeSetCookies(cookies: Record<string, string>, response: Response): v
   }
 }
 
-async function callLodgeMaster(path: string, body: unknown): Promise<LodgeMasterInviteResponse> {
+async function callLodgeMaster<T>(
+  method: 'GET' | 'POST',
+  path: string,
+  body?: unknown,
+): Promise<T> {
   const cookies = await loadSessionCookies();
 
   // The stored cookies alone are rejected until the SPA's startup call has
@@ -392,20 +507,20 @@ async function callLodgeMaster(path: string, body: unknown): Promise<LodgeMaster
   mergeSetCookies(cookies, login);
 
   const response = await fetch(`${LODGEMASTER_BASE_URL}${path}`, {
-    method: 'POST',
+    method,
     headers: lodgeMasterHeaders(cookies),
-    body: JSON.stringify(body),
+    body: method === 'GET' ? undefined : JSON.stringify(body ?? {}),
     redirect: 'manual',
   });
   const text = await response.text();
   if (response.status !== 200) {
     console.error('LodgeMaster request failed', { path, status: response.status });
-    throw new Error('LodgeMaster could not send the invitation. Please try again later.');
+    throw new Error('LodgeMaster could not complete the request. Please try again later.');
   }
   try {
-    return text ? (JSON.parse(text) as LodgeMasterInviteResponse) : {};
+    return (text ? JSON.parse(text) : {}) as T;
   } catch {
-    return {};
+    return {} as T;
   }
 }
 

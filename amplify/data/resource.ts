@@ -26,6 +26,17 @@ const schema = a.schema({
     firstName: a.string(),
     email: a.string(),
     lookupToken: a.string(),
+    /** Set for under-13 members only. */
+    duesYear: a.integer(),
+    requiredDuesYear: a.integer(),
+    duesCurrent: a.boolean(),
+  }),
+
+  DuesLinkResult: a.customType({
+    success: a.boolean().required(),
+    message: a.string().required(),
+    link: a.string(),
+    bsaId: a.string(),
   }),
 
   InviteResult: a.customType({
@@ -56,6 +67,14 @@ const schema = a.schema({
       email: a.string().required(),
     })
     .returns(a.ref('InviteResult'))
+    .handler(a.handler.function(registrationApi))
+    .authorization((allow) => [allow.publicApiKey()]),
+
+  /** LodgeMaster dues-payment link for a looked-up under-13 member whose dues are not current. */
+  requestDuesLink: a
+    .query()
+    .arguments({ lookupToken: a.string().required() })
+    .returns(a.ref('DuesLinkResult'))
     .handler(a.handler.function(registrationApi))
     .authorization((allow) => [allow.publicApiKey()]),
 });

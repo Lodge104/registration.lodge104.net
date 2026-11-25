@@ -7,6 +7,16 @@
   birthdate.
 </p>
 
+@if (duesPending()) {
+  <div role="status" class="alert alert-info alert-soft mb-6">
+    <span>
+      Thanks! Once you've paid your dues, please
+      <strong>check again 15 minutes after your dues payment</strong> by clicking
+      <em>Continue</em> below. It can take that long for your payment to show up.
+    </span>
+  </div>
+}
+
 @if (notice(); as message) {
   <div role="alert" class="alert alert-error alert-soft mb-6">
     <span>{{ message }}</span>
@@ -223,6 +233,52 @@
         <div class="modal-action">
           <button type="button" class="btn btn-secondary" (click)="closeDialog()">Close</button>
         </div>
+      </div>
+    </div>
+  }
+  @case ('dues') {
+    <div class="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="dues-title">
+      <div class="modal-box">
+        <h3 id="dues-title" class="text-primary text-lg font-bold">Dues payment needed</h3>
+        <p class="py-4">
+          {{ member()?.firstName ? member()?.firstName + ', you' : 'You' }} need to pay your lodge
+          dues for {{ member()?.requiredDuesYear }}
+          @if (member()?.duesYear) {
+            (our records show dues paid through {{ member()?.duesYear }})
+          }
+          before you can continue. The payment page will open in a new tab.
+        </p>
+
+        @if (duesError(); as err) {
+          <p class="text-error mb-2" role="alert">{{ err }}</p>
+        }
+
+        @if (duesLink(); as link) {
+          <p class="mb-2">
+            Your browser blocked the new tab.
+            <a [href]="link" target="_blank" rel="noopener noreferrer">Open the dues payment page</a
+            >, then click <em>Done</em>.
+          </p>
+          <div class="modal-action">
+            <button type="button" class="btn btn-secondary" (click)="continueAfterDuesLink()">
+              Done
+            </button>
+          </div>
+        } @else {
+          <div class="modal-action">
+            <button type="button" class="btn btn-outline btn-secondary" (click)="closeDialog()">
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="btn btn-secondary"
+              [disabled]="duesBusy()"
+              (click)="payDues()"
+            >
+              {{ duesBusy() ? 'Opening…' : 'Pay dues' }}
+            </button>
+          </div>
+        }
       </div>
     </div>
   }

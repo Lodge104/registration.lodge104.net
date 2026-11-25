@@ -55,4 +55,5 @@ amplifyconfiguration*
 # Captured LodgeMaster requests (contain live session cookies)
 add.txt
 resend.txt
+dueslink.txt
 *.har
