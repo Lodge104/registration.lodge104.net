@@ -21,4 +21,17 @@ describe('App', () => {
     const compiled = fixture.nativeElement as HTMLElement;
     expect(compiled.querySelector('router-outlet')).toBeTruthy();
   });
+
+  it('should render the lodge header and contact footer', async () => {
+    const fixture = TestBed.createComponent(App);
+    await fixture.whenStable();
+    const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('header')?.textContent).toContain(
+      'Occoneechee Lodge #104 Online Registration',
+    );
+    expect(compiled.querySelector('a[href="mailto:registration@lodge104.com"]')).toBeTruthy();
+    expect(
+      compiled.querySelector('a[href="https://lodge104.net/registration/refunds/"]'),
+    ).toBeTruthy();
+  });
 });

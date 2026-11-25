@@ -1,0 +1,138 @@
+<h2 class="text-primary mb-4 text-[1.875rem] leading-tight font-medium">
+  You have two ways to get started.
+</h2>
+
+<p class="mb-6">
+  Please provide some information so we can identify you. You may provide your BSA ID or name and
+  birthdate.
+</p>
+
+<div class="grid gap-6 md:grid-cols-2">
+  <!-- Option 1: BSA ID -->
+  <form
+    class="card border-base-300 bg-base-200 border"
+    [formGroup]="bsaIdForm"
+    (ngSubmit)="verifyBsaId()"
+    novalidate
+  >
+    <div class="card-body gap-4">
+      <p class="text-base-content/60 text-center text-[30px] leading-tight">BSA ID Number</p>
+
+      <div>
+        <label for="bsaID" class="mb-1 block font-bold">BSA Person ID Number</label>
+        <input
+          id="bsaID"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
+          formControlName="bsaID"
+          placeholder="Enter your BSA ID Number"
+          class="input w-full"
+          [class.input-error]="invalid('bsaIdForm', 'bsaID')"
+          [attr.aria-invalid]="invalid('bsaIdForm', 'bsaID')"
+          aria-describedby="bsaID-help"
+        />
+        @if (invalid('bsaIdForm', 'bsaID')) {
+          <p class="text-error mt-1">Please enter your BSA ID number (digits only).</p>
+        }
+        <p id="bsaID-help" class="text-base-content/60 mt-1">
+          Your BSA Person ID can be found on your Boy Scouts of America registration card.
+        </p>
+      </div>
+
+      <div class="card-actions justify-center">
+        <button type="submit" class="btn btn-secondary">Continue</button>
+      </div>
+    </div>
+  </form>
+
+  <!-- Option 2: Name & Birthdate -->
+  <form
+    class="card border-base-300 bg-base-200 border"
+    [formGroup]="nameForm"
+    (ngSubmit)="verifyNameBirthdate()"
+    novalidate
+  >
+    <div class="card-body gap-4">
+      <p class="text-base-content/60 text-center text-[30px] leading-tight">Name &amp; Birthdate</p>
+
+      <div>
+        <label for="firstName" class="mb-1 block font-bold">First Name</label>
+        <input
+          id="firstName"
+          type="text"
+          autocomplete="given-name"
+          formControlName="firstName"
+          placeholder="Enter your first name"
+          class="input w-full"
+          [class.input-error]="invalid('nameForm', 'firstName')"
+          [attr.aria-invalid]="invalid('nameForm', 'firstName')"
+        />
+      </div>
+
+      <div>
+        <label for="lastName" class="mb-1 block font-bold">Last Name</label>
+        <input
+          id="lastName"
+          type="text"
+          autocomplete="family-name"
+          formControlName="lastName"
+          placeholder="Enter your last name"
+          class="input w-full"
+          [class.input-error]="invalid('nameForm', 'lastName')"
+          [attr.aria-invalid]="invalid('nameForm', 'lastName')"
+        />
+      </div>
+
+      <fieldset>
+        <legend class="mb-1 block font-bold">Birthdate</legend>
+        <div class="flex flex-wrap gap-2">
+          <select
+            id="birthMonth"
+            formControlName="birthMonth"
+            aria-label="Birth month"
+            class="select w-auto"
+            [class.select-error]="invalid('nameForm', 'birthMonth')"
+          >
+            <option value="" disabled>Month</option>
+            @for (m of months; track m.value) {
+              <option [value]="m.value">{{ m.label }}</option>
+            }
+          </select>
+          <select
+            id="birthDay"
+            formControlName="birthDay"
+            aria-label="Birth day"
+            class="select w-auto"
+            [class.select-error]="invalid('nameForm', 'birthDay')"
+          >
+            <option value="" disabled>Day</option>
+            @for (d of days; track d) {
+              <option [value]="d">{{ d }}</option>
+            }
+          </select>
+          <select
+            id="birthYear"
+            formControlName="birthYear"
+            aria-label="Birth year"
+            class="select w-auto"
+            [class.select-error]="invalid('nameForm', 'birthYear')"
+          >
+            <option value="" disabled>Year</option>
+            @for (y of years; track y) {
+              <option [value]="y">{{ y }}</option>
+            }
+          </select>
+        </div>
+      </fieldset>
+
+      @if (nameSubmitted() && nameForm.invalid) {
+        <p class="text-error">Please enter your first name, last name and full birthdate.</p>
+      }
+
+      <div class="card-actions justify-center">
+        <button type="submit" class="btn btn-secondary">Continue</button>
+      </div>
+    </div>
+  </form>
+</div>
