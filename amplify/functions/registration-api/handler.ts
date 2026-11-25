@@ -5,7 +5,6 @@ import {
   ScanCommand,
   type QueryCommandOutput,
 } from '@aws-sdk/lib-dynamodb';
-import type { AppSyncResolverHandler } from 'aws-lambda';
 
 /*
  * Single Lambda behind two AppSync operations:
@@ -99,20 +98,32 @@ interface InviteArgs {
 
 type FieldName = 'lookupMember' | 'sendPortalInvite';
 
+/**
+ * Amplify Data's generated resolver invokes the function with a flat payload
+ * (`{ typeName, fieldName, arguments, identity, source, request, prev }`),
+ * NOT the standard AppSync direct-Lambda event with `info.fieldName`. Accept
+ * both so the handler works however AppSync invokes it.
+ */
+interface ResolverEvent<TArgs> {
+  fieldName?: string;
+  info?: { fieldName?: string };
+  arguments?: TArgs;
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
-export const handler: AppSyncResolverHandler<
-  LookupArgs | InviteArgs,
-  LookupResult | InviteResult
-> = async (event) => {
-  const field = event.info.fieldName as FieldName;
+export const handler = async (
+  event: ResolverEvent<LookupArgs | InviteArgs>,
+): Promise<LookupResult | InviteResult> => {
+  const field = (event.fieldName ?? event.info?.fieldName) as FieldName | undefined;
+  const args = event.arguments ?? {};
   switch (field) {
     case 'lookupMember':
-      return lookupMember(event.arguments as LookupArgs);
+      return lookupMember(args as LookupArgs);
     case 'sendPortalInvite':
-      return sendPortalInvite(event.arguments as InviteArgs);
+      return sendPortalInvite(args as InviteArgs);
     default:
       throw new Error(`Unsupported field: ${String(field)}`);
   }
