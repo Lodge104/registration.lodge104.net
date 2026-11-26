@@ -38,6 +38,15 @@ export interface RegistrationEvent {
   location: string | null;
   startDateTime: string;
   endDateTime: string | null;
+  /** The member already has a registration for this event. */
+  alreadyRegistered: boolean;
+}
+
+export interface ActiveOrdeal {
+  id: string;
+  name: string;
+  startDateTime: string | null;
+  endDateTime: string | null;
 }
 
 export interface EventListResult {
@@ -46,6 +55,8 @@ export interface EventListResult {
   /** True when only Ordeal inductions are offered (the member is a candidate). */
   candidate: boolean;
   events: RegistrationEvent[];
+  /** Candidates only: the unfinished Ordeal they're already registered for. */
+  activeOrdeal: ActiveOrdeal | null;
 }
 
 export interface EventLinkResult {
@@ -97,7 +108,11 @@ export class ApiService {
     const { data, errors } = await this.client.queries.listEvents({ lookupToken });
     if (errors?.length || !data) throw new Error(describe(errors));
     const result = data as EventListResult;
-    return { ...result, events: (result.events ?? []).filter(Boolean) };
+    return {
+      ...result,
+      events: (result.events ?? []).filter(Boolean),
+      activeOrdeal: result.activeOrdeal ?? null,
+    };
   }
 
   async requestEventRegistrationLink(

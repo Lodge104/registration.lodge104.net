@@ -35,6 +35,8 @@ export interface EligibleEvent {
   location: string | null;
   startDateTime: string;
   endDateTime: string | null;
+  /** The member already has a registration (lodge104-event_attendees) for this event. */
+  alreadyRegistered: boolean;
 }
 
 /**
@@ -129,6 +131,7 @@ export function eligibleEvents(
   member: EventMember,
   now: Date,
   timeZone = 'America/New_York',
+  registeredEventIds: ReadonlySet<number> = new Set(),
 ): EligibleEvent[] {
   return [...events]
     .filter((e) => isEventEligible(e, member, now, timeZone))
@@ -138,6 +141,49 @@ export function eligibleEvents(
       location: e.eventLocation?.trim() || null,
       startDateTime: e.startDateTime as string,
       endDateTime: e.endDateTime ?? null,
+      alreadyRegistered: registeredEventIds.has(e.id as number),
     }))
     .sort((a, b) => a.startDateTime.localeCompare(b.startDateTime));
+}
+
+/**
+ * A candidate may hold only one Ordeal registration at a time. Returns the
+ * Ordeal induction they're registered for that hasn't ended yet (soonest
+ * first), or null. Once it ends, they're free to register for another.
+ *
+ * Looks at every registered event, not just ones still open for online
+ * registration, so a registration whose window has since closed still counts.
+ */
+export function activeOrdealRegistration(
+  events: Iterable<EventItem>,
+  registeredEventIds: ReadonlySet<number>,
+  now: Date,
+  timeZone = 'America/New_York',
+): EventItem | null {
+  const active = [...events].filter((e) => {
+    if (typeof e.id !== 'number' || !registeredEventIds.has(e.id)) return false;
+    if (e.isOrdealInduction !== true) return false;
+    const start = parseEventTime(e.startDateTime, timeZone);
+    const end = parseEventTime(e.endDateTime, timeZone) ?? start;
+    return !!end && end.getTime() >= now.getTime();
+  });
+  active.sort((a, b) => (a.startDateTime ?? '').localeCompare(b.startDateTime ?? ''));
+  return active[0] ?? null;
+}
+
+/**
+ * What the member can do with one eligible event:
+ *   - 'registered': already registered for it,
+ *   - 'blocked':    a candidate already holding a different, unfinished Ordeal,
+ *   - 'open':       may register.
+ */
+export function registrationState(
+  eventId: number,
+  member: EventMember,
+  registeredEventIds: ReadonlySet<number>,
+  activeOrdeal: EventItem | null,
+): 'registered' | 'blocked' | 'open' {
+  if (registeredEventIds.has(eventId)) return 'registered';
+  if (isCandidate(member) && activeOrdeal && activeOrdeal.id !== eventId) return 'blocked';
+  return 'open';
 }

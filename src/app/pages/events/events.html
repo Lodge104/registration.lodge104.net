@@ -4,7 +4,9 @@
 
 <p class="mb-6">
   {{ firstName() ? firstName() + ', your' : 'Your' }} dues are current.
-  @if (candidate()) {
+  @if (candidate() && activeOrdeal()) {
+    Candidates can register for only one Ordeal at a time.
+  } @else if (candidate()) {
     Choose the Ordeal induction you'd like to attend, then register. Registration opens in a new
     tab.
   } @else {
@@ -18,7 +20,19 @@
   <div role="alert" class="alert alert-error alert-soft mb-6">
     <span>{{ message }}</span>
   </div>
-} @else if (events().length === 0) {
+} @else if (candidate() && activeOrdeal(); as ordeal) {
+  <!-- Candidates holding an unfinished Ordeal can't pick another until it's over -->
+  <div role="status" class="alert alert-warning alert-soft mb-6" data-testid="active-ordeal">
+    <span>
+      You're already registered for <strong>{{ ordeal.name }}</strong>
+      @if (formatRange(ordeal.startDateTime, ordeal.endDateTime); as dates) {
+        ({{ dates }})
+      }
+      . You can register for another Ordeal after that one is over. Questions? Email
+      <a [href]="'mailto:' + contactEmail">{{ contactEmail }}</a>.
+    </span>
+  </div>
+} @else if (candidate() ? selectableEvents().length === 0 : events().length === 0) {
   <div role="status" class="alert alert-info alert-soft mb-6">
     <span>
       @if (candidate()) {
@@ -35,7 +49,7 @@
   <fieldset class="mb-4">
     <legend class="sr-only">Ordeal inductions</legend>
     <div class="space-y-2">
-      @for (event of events(); track event.id) {
+      @for (event of selectableEvents(); track event.id) {
         <label
           class="border-base-300 bg-base-200 flex cursor-pointer items-start gap-3 rounded-box border p-4"
           [class.border-primary]="selectedEventId() === event.id"
@@ -97,14 +111,20 @@
             <td>{{ event.location || '—' }}</td>
             <td class="whitespace-nowrap">{{ formatDates(event) }}</td>
             <td class="text-right">
-              <button
-                type="button"
-                class="btn btn-secondary btn-sm"
-                [disabled]="busyEventId() !== null"
-                (click)="register(event.id)"
-              >
-                {{ busyEventId() === event.id ? 'Opening…' : 'Register' }}
-              </button>
+              @if (event.alreadyRegistered) {
+                <span class="badge badge-warning badge-soft whitespace-nowrap" role="status">
+                  Already registered
+                </span>
+              } @else {
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  [disabled]="busyEventId() !== null"
+                  (click)="register(event.id)"
+                >
+                  {{ busyEventId() === event.id ? 'Opening…' : 'Register' }}
+                </button>
+              }
               @if (rowError()?.eventId === event.id) {
                 <p class="text-error mt-1 text-left" role="alert">{{ rowError()?.message }}</p>
               }

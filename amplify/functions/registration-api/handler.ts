@@ -10,9 +10,11 @@ import { DEFAULT_LODGE_TIMEZONE, ageOn, duesStatus } from './lodge-date';
 import {
   type EligibleEvent,
   type EventItem,
+  activeOrdealRegistration,
   eligibleEvents,
   isCandidate,
   isEventEligible,
+  registrationState,
 } from './events';
 import { signLookupToken, verifyLookupToken } from './lookup-token';
 import { buildRosterIndex, createRosterCache, rosterKey, type RosterItem } from './roster';
@@ -51,6 +53,8 @@ const {
   MEMBER_DATA_TABLE_NAME = 'lodge104-member_data',
   KEYS_TABLE_NAME = 'lodge104-keys',
   EVENT_DATA_TABLE_NAME = 'lodge104-event_data',
+  EVENT_ATTENDEES_TABLE_NAME = 'lodge104-event_attendees',
+  EVENT_ATTENDEES_MEMBER_INDEX = 'BsaPersonId-index',
   LODGEMASTER_BASE_URL = 'https://lodgemaster-client.oa-scouting.org',
   MIN_PORTAL_AGE = '13',
   DUES_TIMEZONE = DEFAULT_LODGE_TIMEZONE,
@@ -148,6 +152,16 @@ export interface EventListResult {
   /** True when only Ordeal inductions are offered (the member is a candidate). */
   candidate: boolean;
   events: EligibleEvent[];
+  /**
+   * Candidates only: the unfinished Ordeal they're already registered for.
+   * While set, they can't register for any other Ordeal.
+   */
+  activeOrdeal: {
+    id: string;
+    name: string;
+    startDateTime: string | null;
+    endDateTime: string | null;
+  } | null;
 }
 
 export interface EventLinkResult {
@@ -523,6 +537,44 @@ async function eventEligibleMember(
   return { member };
 }
 
+/**
+ * Event ids the member is registered for, from lodge104-event_attendees via
+ * its BsaPersonId index (one row per registration; only the key is read).
+ */
+async function loadRegisteredEventIds(bsaPersonId: number): Promise<Set<number>> {
+  const ids = new Set<number>();
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const page = await ddb.send(
+      new QueryCommand({
+        TableName: EVENT_ATTENDEES_TABLE_NAME,
+        IndexName: EVENT_ATTENDEES_MEMBER_INDEX,
+        KeyConditionExpression: 'BsaPersonId = :id',
+        ExpressionAttributeValues: { ':id': bsaPersonId },
+        ProjectionExpression: 'eventId',
+        ExclusiveStartKey,
+      }),
+    );
+    for (const item of page.Items ?? []) {
+      if (typeof item['eventId'] === 'number') ids.add(item['eventId']);
+    }
+    ExclusiveStartKey = page.LastEvaluatedKey;
+  } while (ExclusiveStartKey);
+  return ids;
+}
+
+/** Everything the event operations need about one member, loaded in parallel. */
+async function memberEventContext(member: MemberRecord, now: Date) {
+  const [allEvents, registered] = await Promise.all([
+    loadEvents(),
+    loadRegisteredEventIds(member.BsaPersonId),
+  ]);
+  const activeOrdeal = isCandidate(member)
+    ? activeOrdealRegistration(allEvents, registered, now, DUES_TIMEZONE)
+    : null;
+  return { allEvents, registered, activeOrdeal };
+}
+
 /** lodge104-event_data is small (~170 items), so a projected scan is fine. */
 async function loadEvents(): Promise<EventItem[]> {
   const items: EventItem[] = [];
@@ -548,15 +600,30 @@ async function loadEvents(): Promise<EventItem[]> {
 export async function listEvents(args: EventListArgs, now = new Date()): Promise<EventListResult> {
   const checked = await eventEligibleMember(args.lookupToken, now);
   if ('message' in checked) {
-    return { success: false, message: checked.message, candidate: false, events: [] };
+    return {
+      success: false,
+      message: checked.message,
+      candidate: false,
+      events: [],
+      activeOrdeal: null,
+    };
   }
   const { member } = checked;
-  const events = eligibleEvents(await loadEvents(), member, now, DUES_TIMEZONE);
+  const { allEvents, registered, activeOrdeal } = await memberEventContext(member, now);
+  const events = eligibleEvents(allEvents, member, now, DUES_TIMEZONE, registered);
   return {
     success: true,
     message: events.length ? 'ok' : 'No events are open for registration right now.',
     candidate: isCandidate(member),
     events,
+    activeOrdeal: activeOrdeal
+      ? {
+          id: String(activeOrdeal.id),
+          name: clean(activeOrdeal.name) || 'your Ordeal',
+          startDateTime: activeOrdeal.startDateTime ?? null,
+          endDateTime: activeOrdeal.endDateTime ?? null,
+        }
+      : null,
   };
 }
 
@@ -579,10 +646,21 @@ export async function requestEventRegistrationLink(
   const { member } = checked;
 
   // Re-check this specific event against the same rules as the list, so a
-  // caller can't request a link for an event they aren't allowed to see.
-  const event = (await loadEvents()).find((e) => e.id === Number(eventId));
+  // caller can't request a link for an event they aren't allowed to see,
+  // are already registered for, or (candidates) while holding another Ordeal.
+  const { allEvents, registered, activeOrdeal } = await memberEventContext(member, now);
+  const event = allEvents.find((e) => e.id === Number(eventId));
   if (!event || !isEventEligible(event, member, now, DUES_TIMEZONE)) {
     return linkFailure('Registration for that event is not open right now.');
+  }
+  switch (registrationState(Number(eventId), member, registered, activeOrdeal)) {
+    case 'registered':
+      return linkFailure('You are already registered for this event.');
+    case 'blocked':
+      return linkFailure(
+        `You are already registered for ${clean(activeOrdeal?.name) || 'an Ordeal'}. ` +
+          'Candidates can register for only one Ordeal at a time.',
+      );
   }
   if (!member.OalmId) return linkFailure('Your member record is missing a LodgeMaster ID.');
 

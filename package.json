@@ -11,7 +11,8 @@
     "sandbox:once": "ampx sandbox --once",
     "sandbox:delete": "ampx sandbox delete",
     "outputs": "ampx generate outputs --app-id d1c2x4zpjcxv7w --branch main",
-    "typecheck:backend": "tsc --noEmit -p amplify/tsconfig.json"
+    "typecheck:backend": "tsc --noEmit -p amplify/tsconfig.json",
+    "synth": "node scripts/synth.mjs"
   },
   "private": true,
   "packageManager": "npm@11.19.1",

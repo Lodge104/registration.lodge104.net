@@ -52,6 +52,15 @@ const schema = a.schema({
     location: a.string(),
     startDateTime: a.string().required(),
     endDateTime: a.string(),
+    /** The member already has a registration for this event. */
+    alreadyRegistered: a.boolean().required(),
+  }),
+
+  ActiveOrdeal: a.customType({
+    id: a.string().required(),
+    name: a.string().required(),
+    startDateTime: a.string(),
+    endDateTime: a.string(),
   }),
 
   EventListResult: a.customType({
@@ -60,6 +69,8 @@ const schema = a.schema({
     /** True when only Ordeal inductions are offered (the member is a candidate). */
     candidate: a.boolean().required(),
     events: a.ref('RegistrationEvent').array().required(),
+    /** Candidates only: the unfinished Ordeal they're already registered for. */
+    activeOrdeal: a.ref('ActiveOrdeal'),
   }),
 
   EventLinkResult: a.customType({

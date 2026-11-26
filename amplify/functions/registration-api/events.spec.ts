@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   type EventItem,
+  activeOrdealRegistration,
   eligibleEvents,
   isCandidate,
   isEventEligible,
   parseEventTime,
+  registrationState,
 } from './events';
 
 const now = new Date('2026-11-26T17:00:00Z'); // Nov 26, noon ET
@@ -157,6 +159,7 @@ describe('eligibleEvents', () => {
         location: null,
         startDateTime: '2027-01-10T13:00:00Z',
         endDateTime: '2027-08-01T13:00:00.0000000Z',
+        alreadyRegistered: false,
       },
       {
         id: '3',
@@ -164,7 +167,78 @@ describe('eligibleEvents', () => {
         location: 'Out of Council',
         startDateTime: '2027-07-26T13:00:00Z',
         endDateTime: '2027-08-01T13:00:00.0000000Z',
+        alreadyRegistered: false,
       },
     ]);
+  });
+
+  it('marks events the member is already registered for', () => {
+    const result = eligibleEvents(
+      [open({ id: 1 }), open({ id: 2 })],
+      member,
+      now,
+      undefined,
+      new Set([2]),
+    );
+    expect(result.map((e) => [e.id, e.alreadyRegistered])).toEqual([
+      ['1', false],
+      ['2', true],
+    ]);
+  });
+});
+
+describe('one Ordeal at a time (candidates)', () => {
+  const candidate = { ...member, Level: 'Candidate' };
+  const spring = open({
+    id: 10,
+    name: 'Spring Ordeal',
+    isOrdealInduction: true,
+    startDateTime: '2027-04-09T22:00:00Z',
+    endDateTime: '2027-04-11T16:00:00Z',
+  });
+  const fall = open({
+    id: 11,
+    name: 'Fall Ordeal',
+    isOrdealInduction: true,
+    startDateTime: '2027-10-08T22:00:00Z',
+    endDateTime: '2027-10-10T16:00:00Z',
+  });
+  const banquet = open({ id: 12, name: 'Banquet', isOrdealInduction: false });
+
+  it('finds the unfinished Ordeal the member is registered for', () => {
+    expect(activeOrdealRegistration([spring, fall], new Set([10]), now)?.id).toBe(10);
+  });
+
+  it('ignores registrations for events that are not Ordeal inductions', () => {
+    expect(activeOrdealRegistration([banquet, fall], new Set([12]), now)).toBeNull();
+  });
+
+  it('frees the member once that Ordeal is over', () => {
+    const afterSpring = new Date('2027-04-12T00:00:00Z');
+    expect(activeOrdealRegistration([spring, fall], new Set([10]), afterSpring)).toBeNull();
+  });
+
+  it('counts an Ordeal whose online registration window has already closed', () => {
+    const closed = { ...spring, onlineRegEndDate: '2026-11-01T00:00:00.0000000' };
+    expect(activeOrdealRegistration([closed], new Set([10]), now)?.id).toBe(10);
+  });
+
+  it('blocks a candidate from a second Ordeal and marks the one they hold', () => {
+    const registered = new Set([10]);
+    const active = activeOrdealRegistration([spring, fall], registered, now);
+    expect(registrationState(10, candidate, registered, active)).toBe('registered');
+    expect(registrationState(11, candidate, registered, active)).toBe('blocked');
+  });
+
+  it('lets a candidate register when they hold no unfinished Ordeal', () => {
+    expect(registrationState(11, candidate, new Set(), null)).toBe('open');
+  });
+
+  it('does not apply the one-Ordeal rule once the member is no longer a candidate', () => {
+    const registered = new Set([10]);
+    const active = activeOrdealRegistration([spring, fall], registered, now);
+    expect(registrationState(11, member, registered, active)).toBe('open');
+    expect(registrationState(12, member, registered, active)).toBe('open');
+    expect(registrationState(10, member, registered, active)).toBe('registered');
   });
 });

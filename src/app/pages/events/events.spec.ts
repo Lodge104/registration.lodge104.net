@@ -1,6 +1,11 @@
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { ApiService, type EventListResult, type RegistrationEvent } from '../../api.service';
+import {
+  ApiService,
+  type ActiveOrdeal,
+  type EventListResult,
+  type RegistrationEvent,
+} from '../../api.service';
 import { MemberSession } from '../../member-session';
 import { Events } from './events';
 
@@ -10,6 +15,7 @@ const event = (over: Partial<RegistrationEvent> = {}): RegistrationEvent => ({
   location: 'Out of Council',
   startDateTime: '2027-07-26T13:00:00.0000000Z',
   endDateTime: '2027-08-01T13:00:00.0000000Z',
+  alreadyRegistered: false,
   ...over,
 });
 const LINK = 'https://members.oa-scouting.org/link/member?token=abc';
@@ -53,11 +59,16 @@ describe('Events', () => {
     return { el: fixture.nativeElement as HTMLElement, navigate, openTab, fakeTab, settle };
   }
 
-  const list = (events: RegistrationEvent[], candidate = false): EventListResult => ({
+  const list = (
+    events: RegistrationEvent[],
+    candidate = false,
+    activeOrdeal: ActiveOrdeal | null = null,
+  ): EventListResult => ({
     success: true,
     message: 'ok',
     candidate,
     events,
+    activeOrdeal,
   });
 
   it('sends the member back to the start page when there is no session', async () => {
@@ -141,8 +152,19 @@ describe('Events', () => {
       message: 'Your session has expired. Please look yourself up again.',
       candidate: false,
       events: [],
+      activeOrdeal: null,
     });
     expect(el.querySelector('[role=alert]')?.textContent).toContain('session has expired');
+  });
+
+  it('shows an "already registered" warning instead of the Register button', async () => {
+    const { el } = await setup(
+      list([event({ id: '1', name: 'Banquet' }), event({ id: '2', alreadyRegistered: true })]),
+    );
+    const rows = el.querySelectorAll('tbody tr');
+    expect(rows[0].querySelector('button')?.textContent).toContain('Register');
+    expect(rows[1].querySelector('button')).toBeNull();
+    expect(rows[1].textContent).toContain('Already registered');
   });
 
   describe('candidates', () => {
@@ -184,5 +206,51 @@ describe('Events', () => {
       const { el } = await setup(list([], true));
       expect(el.querySelector('[role=status]')?.textContent).toContain('no Ordeal inductions');
     });
+
+    it('blocks every other Ordeal while one registration is unfinished', async () => {
+      const held: ActiveOrdeal = {
+        id: '1',
+        name: 'Spring Ordeal',
+        startDateTime: '2027-04-09T22:00:00Z',
+        endDateTime: '2027-04-11T16:00:00Z',
+      };
+      const { el } = await setup(
+        list([{ ...inductions[0], alreadyRegistered: true }, inductions[1]], true, held),
+      );
+      const notice = el.querySelector('[data-testid=active-ordeal]')!;
+      expect(notice.textContent).toContain("You're already registered for");
+      expect(notice.textContent).toContain('Spring Ordeal');
+      expect(notice.textContent).toContain('Fri, Apr 9 – Sun, Apr 11, 2027');
+      expect(el.querySelectorAll('input[type=radio]').length).toBe(0);
+      expect(el.querySelector('button.btn')).toBeNull();
+    });
+
+    it('blocks the candidate even if the held Ordeal is no longer open for registration', async () => {
+      const held: ActiveOrdeal = {
+        id: '9',
+        name: 'Winter Ordeal',
+        startDateTime: '2027-01-15T22:00:00Z',
+        endDateTime: '2027-01-17T16:00:00Z',
+      };
+      const { el } = await setup(list(inductions, true, held));
+      expect(el.querySelector('[data-testid=active-ordeal]')?.textContent).toContain(
+        'Winter Ordeal',
+      );
+      expect(el.querySelectorAll('input[type=radio]').length).toBe(0);
+    });
+  });
+
+  it('shows all events normally once the member is no longer a candidate', async () => {
+    // Server reports candidate=false (e.g. Level is now Ordeal), even though
+    // they are registered for an Ordeal that hasn't ended.
+    const { el } = await setup(
+      list([
+        event({ id: '1', name: 'Spring Ordeal', alreadyRegistered: true }),
+        event({ id: '2', name: 'Fall Fellowship' }),
+      ]),
+    );
+    expect(el.querySelector('[data-testid=active-ordeal]')).toBeNull();
+    expect(el.querySelectorAll('tbody tr').length).toBe(2);
+    expect(el.querySelectorAll('tbody button').length).toBe(1);
   });
 });

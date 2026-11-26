@@ -1,6 +1,6 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
-import { ApiService, type RegistrationEvent } from '../../api.service';
+import { ApiService, type ActiveOrdeal, type RegistrationEvent } from '../../api.service';
 import { MemberSession } from '../../member-session';
 import { CONTACT_EMAIL } from '../../site-config';
 
@@ -29,6 +29,12 @@ export class Events implements OnInit {
   protected readonly error = signal<string | null>(null);
   protected readonly events = signal<RegistrationEvent[]>([]);
   protected readonly candidate = signal(false);
+  /** Candidates: the unfinished Ordeal they already hold (blocks all others). */
+  protected readonly activeOrdeal = signal<ActiveOrdeal | null>(null);
+  /** Ordeals a candidate may still pick (none while they hold one). */
+  protected readonly selectableEvents = computed(() =>
+    this.activeOrdeal() ? [] : this.events().filter((e) => !e.alreadyRegistered),
+  );
 
   /** Event currently fetching its link. */
   protected readonly busyEventId = signal<string | null>(null);
@@ -54,8 +60,10 @@ export class Events implements OnInit {
       }
       this.events.set(result.events);
       this.candidate.set(result.candidate);
-      if (result.candidate && result.events.length === 1) {
-        this.selectedEventId.set(result.events[0].id);
+      this.activeOrdeal.set(result.candidate ? result.activeOrdeal : null);
+      const selectable = this.selectableEvents();
+      if (result.candidate && selectable.length === 1) {
+        this.selectedEventId.set(selectable[0].id);
       }
     } catch (err) {
       console.error('listEvents failed', err);
@@ -86,6 +94,7 @@ export class Events implements OnInit {
   protected async register(eventId: string): Promise<void> {
     const token = this.session.lookupToken();
     if (!token || this.busyEventId()) return;
+    if (this.events().find((e) => e.id === eventId)?.alreadyRegistered) return;
 
     const tab = this.openTab();
     this.rowError.set(null);
@@ -122,8 +131,13 @@ export class Events implements OnInit {
 
   /** "Sat, Dec 5, 2026" (one day) or "Sat, Dec 5 – Sun, Dec 6, 2026", in lodge time. */
   protected formatDates(event: RegistrationEvent): string {
-    const start = new Date(event.startDateTime);
-    const end = event.endDateTime ? new Date(event.endDateTime) : null;
+    return this.formatRange(event.startDateTime, event.endDateTime);
+  }
+
+  protected formatRange(startIso: string | null, endIso: string | null): string {
+    if (!startIso) return '';
+    const start = new Date(startIso);
+    const end = endIso ? new Date(endIso) : null;
     const day = (d: Date, withYear: boolean) =>
       d.toLocaleDateString('en-US', {
         timeZone: LODGE_TIMEZONE,
