@@ -1,0 +1,285 @@
+<h2 class="text-primary mb-4 text-[1.875rem] leading-tight font-medium">
+  You have two ways to get started.
+</h2>
+
+<p class="mb-6">
+  Please provide some information so we can identify you. You may provide your Scouting Member ID or
+  name and birthdate.
+</p>
+
+@if (duesPending()) {
+  <div role="status" class="alert alert-info alert-soft mb-6">
+    <span>
+      Thanks! Once you've paid your dues, please
+      <strong>check again 15 minutes after your dues payment</strong> by clicking
+      <em>Continue</em> below. It can take that long for your payment to show up.
+    </span>
+  </div>
+}
+
+@if (notice(); as message) {
+  <div role="alert" class="alert alert-error alert-soft mb-6">
+    <span>{{ message }}</span>
+  </div>
+}
+
+<div class="grid gap-6 md:grid-cols-2">
+  <!-- Option 1: Scouting Member ID -->
+  <form
+    class="card border-base-300 bg-base-200 border"
+    [formGroup]="bsaIdForm"
+    (ngSubmit)="verifyBsaId()"
+    novalidate
+  >
+    <div class="card-body gap-4">
+      <p class="text-base-content/60 text-center text-[30px] leading-tight">Scouting Member ID</p>
+
+      <div>
+        <label for="bsaID" class="mb-1 block font-bold">Scouting Member ID Number</label>
+        <input
+          id="bsaID"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
+          formControlName="bsaID"
+          placeholder="Enter your Scouting Member ID"
+          class="input w-full"
+          [class.input-error]="invalid('bsaIdForm', 'bsaID')"
+          [attr.aria-invalid]="invalid('bsaIdForm', 'bsaID')"
+          aria-describedby="bsaID-help"
+        />
+        @if (invalid('bsaIdForm', 'bsaID')) {
+          <p class="text-error mt-1">Please enter your Scouting Member ID (digits only).</p>
+        }
+        <p id="bsaID-help" class="text-base-content/60 mt-1">
+          Your Scouting Member ID can be found on your Scouting America membership card.
+        </p>
+      </div>
+
+      <div class="card-actions justify-center">
+        <button type="submit" class="btn btn-secondary" [disabled]="loading()">
+          {{ loading() ? 'Looking you up…' : 'Continue' }}
+        </button>
+      </div>
+    </div>
+  </form>
+
+  <!-- Option 2: Name & Birthdate -->
+  <form
+    class="card border-base-300 bg-base-200 border"
+    [formGroup]="nameForm"
+    (ngSubmit)="verifyNameBirthdate()"
+    novalidate
+  >
+    <div class="card-body gap-4">
+      <p class="text-base-content/60 text-center text-[30px] leading-tight">Name &amp; Birthdate</p>
+
+      <div>
+        <label for="firstName" class="mb-1 block font-bold">First Name</label>
+        <input
+          id="firstName"
+          type="text"
+          autocomplete="given-name"
+          formControlName="firstName"
+          placeholder="Enter your first name"
+          class="input w-full"
+          [class.input-error]="invalid('nameForm', 'firstName')"
+          [attr.aria-invalid]="invalid('nameForm', 'firstName')"
+        />
+      </div>
+
+      <div>
+        <label for="lastName" class="mb-1 block font-bold">Last Name</label>
+        <input
+          id="lastName"
+          type="text"
+          autocomplete="family-name"
+          formControlName="lastName"
+          placeholder="Enter your last name"
+          class="input w-full"
+          [class.input-error]="invalid('nameForm', 'lastName')"
+          [attr.aria-invalid]="invalid('nameForm', 'lastName')"
+        />
+      </div>
+
+      <fieldset>
+        <legend class="mb-1 block font-bold">Birthdate</legend>
+        <div class="flex flex-wrap gap-2">
+          <select
+            id="birthMonth"
+            formControlName="birthMonth"
+            aria-label="Birth month"
+            class="select w-auto"
+            [class.select-error]="invalid('nameForm', 'birthMonth')"
+          >
+            <option value="" disabled>Month</option>
+            @for (m of months; track m.value) {
+              <option [value]="m.value">{{ m.label }}</option>
+            }
+          </select>
+          <select
+            id="birthDay"
+            formControlName="birthDay"
+            aria-label="Birth day"
+            class="select w-auto"
+            [class.select-error]="invalid('nameForm', 'birthDay')"
+          >
+            <option value="" disabled>Day</option>
+            @for (d of days; track d) {
+              <option [value]="d">{{ d }}</option>
+            }
+          </select>
+          <select
+            id="birthYear"
+            formControlName="birthYear"
+            aria-label="Birth year"
+            class="select w-auto"
+            [class.select-error]="invalid('nameForm', 'birthYear')"
+          >
+            <option value="" disabled>Year</option>
+            @for (y of years; track y) {
+              <option [value]="y">{{ y }}</option>
+            }
+          </select>
+        </div>
+      </fieldset>
+
+      @if (nameSubmitted() && nameForm.invalid) {
+        <p class="text-error">Please enter your first name, last name and full birthdate.</p>
+      }
+
+      <div class="card-actions justify-center">
+        <button type="submit" class="btn btn-secondary" [disabled]="loading()">
+          {{ loading() ? 'Looking you up…' : 'Continue' }}
+        </button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Popups -->
+@switch (dialog()) {
+  @case ('active') {
+    <div class="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="active-title">
+      <div class="modal-box">
+        <h3 id="active-title" class="text-primary text-lg font-bold">
+          You already have an account
+        </h3>
+        <p class="py-4">
+          {{ member()?.firstName ? member()?.firstName + ', we' : 'We' }} found your record, and it
+          shows you already have an active OA Member portal account. Were you aware of that?
+        </p>
+        <div class="modal-action">
+          <button type="button" class="btn btn-outline btn-secondary" (click)="answerAware(false)">
+            No, I wasn't
+          </button>
+          <button type="button" class="btn btn-secondary" (click)="answerAware(true)">
+            Yes, I was
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+  @case ('invite') {
+    <div class="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="invite-title">
+      <form class="modal-box" (submit)="$event.preventDefault(); submitInvite()" novalidate>
+        <h3 id="invite-title" class="text-primary text-lg font-bold">
+          {{
+            member()?.action === 'RESEND_INVITE'
+              ? 'Resend your portal invitation'
+              : 'Create your portal account'
+          }}
+        </h3>
+        <p class="py-4">
+          We'll email you instructions to finish setting up your OA Member portal account. Confirm
+          the email address below, or change it.
+        </p>
+
+        <label for="inviteEmail" class="mb-1 block font-bold">Email address</label>
+        <input
+          id="inviteEmail"
+          type="email"
+          autocomplete="email"
+          class="input w-full"
+          [class.input-error]="emailControl.invalid && emailControl.touched"
+          [formControl]="emailControl"
+        />
+        @if (emailControl.invalid && emailControl.touched) {
+          <p class="text-error mt-1">Please enter a valid email address.</p>
+        }
+        @if (inviteError(); as err) {
+          <p class="text-error mt-2" role="alert">{{ err }}</p>
+        }
+
+        <div class="modal-action">
+          <button type="button" class="btn btn-outline btn-secondary" (click)="closeDialog()">
+            Cancel
+          </button>
+          <button type="submit" class="btn btn-secondary" [disabled]="inviteBusy()">
+            {{ inviteBusy() ? 'Sending…' : 'Send email' }}
+          </button>
+        </div>
+      </form>
+    </div>
+  }
+  @case ('done') {
+    <div class="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="done-title">
+      <div class="modal-box">
+        <h3 id="done-title" class="text-primary text-lg font-bold">Check your email</h3>
+        <p class="py-4">
+          We just sent an email to <strong>{{ sentTo() }}</strong>. Please follow the directions in
+          that email to finish setting up your account.
+        </p>
+        <div class="modal-action">
+          <button type="button" class="btn btn-secondary" (click)="closeDialog()">Close</button>
+        </div>
+      </div>
+    </div>
+  }
+  @case ('dues') {
+    <div class="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="dues-title">
+      <div class="modal-box">
+        <h3 id="dues-title" class="text-primary text-lg font-bold">Dues payment needed</h3>
+        <p class="py-4">
+          {{ member()?.firstName ? member()?.firstName + ', you' : 'You' }} need to pay your lodge
+          dues for {{ member()?.requiredDuesYear }}
+          @if (member()?.duesYear) {
+            (our records show dues paid through {{ member()?.duesYear }})
+          }
+          before you can continue. The payment page will open in a new tab.
+        </p>
+
+        @if (duesError(); as err) {
+          <p class="text-error mb-2" role="alert">{{ err }}</p>
+        }
+
+        @if (duesLink(); as link) {
+          <p class="mb-2">
+            Your browser blocked the new tab.
+            <a [href]="link" target="_blank" rel="noopener noreferrer">Open the dues payment page</a
+            >, then click <em>Done</em>.
+          </p>
+          <div class="modal-action">
+            <button type="button" class="btn btn-secondary" (click)="continueAfterDuesLink()">
+              Done
+            </button>
+          </div>
+        } @else {
+          <div class="modal-action">
+            <button type="button" class="btn btn-outline btn-secondary" (click)="closeDialog()">
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="btn btn-secondary"
+              [disabled]="duesBusy()"
+              (click)="payDues()"
+            >
+              {{ duesBusy() ? 'Opening…' : 'Pay dues' }}
+            </button>
+          </div>
+        }
+      </div>
+    </div>
+  }
+}
