@@ -32,6 +32,28 @@ export interface InviteResult {
   expiresAt: string | null;
 }
 
+export interface RegistrationEvent {
+  id: string;
+  name: string;
+  location: string | null;
+  startDateTime: string;
+  endDateTime: string | null;
+}
+
+export interface EventListResult {
+  success: boolean;
+  message: string;
+  /** True when only Ordeal inductions are offered (the member is a candidate). */
+  candidate: boolean;
+  events: RegistrationEvent[];
+}
+
+export interface EventLinkResult {
+  success: boolean;
+  message: string;
+  link: string | null;
+}
+
 export interface LookupArgs {
   bsaId?: string;
   firstName?: string;
@@ -69,6 +91,25 @@ export class ApiService {
     const { data, errors } = await this.client.queries.requestDuesLink({ lookupToken });
     if (errors?.length || !data) throw new Error(describe(errors));
     return data as DuesLinkResult;
+  }
+
+  async listEvents(lookupToken: string): Promise<EventListResult> {
+    const { data, errors } = await this.client.queries.listEvents({ lookupToken });
+    if (errors?.length || !data) throw new Error(describe(errors));
+    const result = data as EventListResult;
+    return { ...result, events: (result.events ?? []).filter(Boolean) };
+  }
+
+  async requestEventRegistrationLink(
+    lookupToken: string,
+    eventId: string,
+  ): Promise<EventLinkResult> {
+    const { data, errors } = await this.client.queries.requestEventRegistrationLink({
+      lookupToken,
+      eventId,
+    });
+    if (errors?.length || !data) throw new Error(describe(errors));
+    return data as EventLinkResult;
   }
 }
 

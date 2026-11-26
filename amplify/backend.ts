@@ -57,6 +57,13 @@ lambda.addToRolePolicy(
     resources: [tableArn('lodge104-keys')],
   }),
 );
+lambda.addToRolePolicy(
+  new PolicyStatement({
+    sid: 'ReadEventData',
+    actions: ['dynamodb:Scan'],
+    resources: [tableArn('lodge104-event_data')],
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // Lookup-token signing key: a random 64-character secret generated per

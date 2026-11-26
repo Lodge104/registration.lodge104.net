@@ -46,6 +46,28 @@ const schema = a.schema({
     expiresAt: a.string(),
   }),
 
+  RegistrationEvent: a.customType({
+    id: a.string().required(),
+    name: a.string().required(),
+    location: a.string(),
+    startDateTime: a.string().required(),
+    endDateTime: a.string(),
+  }),
+
+  EventListResult: a.customType({
+    success: a.boolean().required(),
+    message: a.string().required(),
+    /** True when only Ordeal inductions are offered (the member is a candidate). */
+    candidate: a.boolean().required(),
+    events: a.ref('RegistrationEvent').array().required(),
+  }),
+
+  EventLinkResult: a.customType({
+    success: a.boolean().required(),
+    message: a.string().required(),
+    link: a.string(),
+  }),
+
   /** Find a member by BSA ID, or by first + last name and birthdate (YYYY-MM-DD). */
   lookupMember: a
     .query()
@@ -75,6 +97,22 @@ const schema = a.schema({
     .query()
     .arguments({ lookupToken: a.string().required() })
     .returns(a.ref('DuesLinkResult'))
+    .handler(a.handler.function(registrationApi))
+    .authorization((allow) => [allow.publicApiKey()]),
+
+  /** Upcoming events an under-13 member with current dues can register for online. */
+  listEvents: a
+    .query()
+    .arguments({ lookupToken: a.string().required() })
+    .returns(a.ref('EventListResult'))
+    .handler(a.handler.function(registrationApi))
+    .authorization((allow) => [allow.publicApiKey()]),
+
+  /** The member's LodgeMaster registration link for one event from listEvents. */
+  requestEventRegistrationLink: a
+    .query()
+    .arguments({ lookupToken: a.string().required(), eventId: a.string().required() })
+    .returns(a.ref('EventLinkResult'))
     .handler(a.handler.function(registrationApi))
     .authorization((allow) => [allow.publicApiKey()]),
 });

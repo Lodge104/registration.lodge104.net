@@ -1,0 +1,129 @@
+<h2 class="text-primary mb-4 text-[1.875rem] leading-tight font-medium">
+  {{ candidate() ? 'Choose your Ordeal' : 'Upcoming events' }}
+</h2>
+
+<p class="mb-6">
+  {{ firstName() ? firstName() + ', your' : 'Your' }} dues are current.
+  @if (candidate()) {
+    Choose the Ordeal induction you'd like to attend, then register. Registration opens in a new
+    tab.
+  } @else {
+    Here are the upcoming events you can register for online. Registration opens in a new tab.
+  }
+</p>
+
+@if (loading()) {
+  <p class="text-base-content/60" role="status">Loading events…</p>
+} @else if (error(); as message) {
+  <div role="alert" class="alert alert-error alert-soft mb-6">
+    <span>{{ message }}</span>
+  </div>
+} @else if (events().length === 0) {
+  <div role="status" class="alert alert-info alert-soft mb-6">
+    <span>
+      @if (candidate()) {
+        There are no Ordeal inductions open for registration right now.
+      } @else {
+        There are no events open for online registration right now.
+      }
+      Please check back later, or email
+      <a [href]="'mailto:' + contactEmail">{{ contactEmail }}</a> with questions.
+    </span>
+  </div>
+} @else if (candidate()) {
+  <!-- Candidates: pick one Ordeal induction, then register -->
+  <fieldset class="mb-4">
+    <legend class="sr-only">Ordeal inductions</legend>
+    <div class="space-y-2">
+      @for (event of events(); track event.id) {
+        <label
+          class="border-base-300 bg-base-200 flex cursor-pointer items-start gap-3 rounded-box border p-4"
+          [class.border-primary]="selectedEventId() === event.id"
+        >
+          <input
+            type="radio"
+            name="ordeal"
+            class="radio radio-primary mt-0.5"
+            [value]="event.id"
+            [checked]="selectedEventId() === event.id"
+            (change)="selectEvent(event.id)"
+          />
+          <span>
+            <span class="block font-bold">{{ event.name }}</span>
+            <span class="block">{{ formatDates(event) }}</span>
+            @if (event.location) {
+              <span class="text-base-content/60 block">{{ event.location }}</span>
+            }
+          </span>
+        </label>
+      }
+    </div>
+  </fieldset>
+
+  @if (rowError(); as err) {
+    <p class="text-error mb-2" role="alert">{{ err.message }}</p>
+  }
+  @if (blockedLink(); as blocked) {
+    <p class="mb-2">
+      Your browser blocked the new tab.
+      <a [href]="blocked.link" target="_blank" rel="noopener noreferrer">Open registration</a>.
+    </p>
+  }
+
+  <button
+    type="button"
+    class="btn btn-secondary"
+    [disabled]="!selectedEventId() || busyEventId()"
+    (click)="registerSelected()"
+  >
+    {{ busyEventId() ? 'Opening…' : 'Register' }}
+  </button>
+} @else {
+  <!-- Everyone else: table with a Register button per event -->
+  <div class="border-base-300 overflow-x-auto rounded-box border">
+    <table class="table">
+      <thead>
+        <tr>
+          <th scope="col">Event</th>
+          <th scope="col">Location</th>
+          <th scope="col">Date</th>
+          <th scope="col"><span class="sr-only">Register</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (event of events(); track event.id) {
+          <tr>
+            <td class="font-bold">{{ event.name }}</td>
+            <td>{{ event.location || '—' }}</td>
+            <td class="whitespace-nowrap">{{ formatDates(event) }}</td>
+            <td class="text-right">
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                [disabled]="busyEventId() !== null"
+                (click)="register(event.id)"
+              >
+                {{ busyEventId() === event.id ? 'Opening…' : 'Register' }}
+              </button>
+              @if (rowError()?.eventId === event.id) {
+                <p class="text-error mt-1 text-left" role="alert">{{ rowError()?.message }}</p>
+              }
+              @if (blockedLink()?.eventId === event.id) {
+                <p class="mt-1 text-left">
+                  Pop-up blocked.
+                  <a [href]="blockedLink()?.link" target="_blank" rel="noopener noreferrer"
+                    >Open registration</a
+                  >.
+                </p>
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+}
+
+<p class="mt-8">
+  <a routerLink="/" (click)="startOver()">Look up a different member</a>
+</p>

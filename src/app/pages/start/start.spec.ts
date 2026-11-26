@@ -1,5 +1,7 @@
 import { TestBed } from '@angular/core/testing';
+import { Router, provideRouter } from '@angular/router';
 import { ApiService, type InviteResult, type MemberLookup } from '../../api.service';
+import { MemberSession } from '../../member-session';
 import { DUES_PENDING_KEY, Start } from './start';
 
 const found = (over: Partial<MemberLookup> = {}): MemberLookup => ({
@@ -24,6 +26,7 @@ describe('Start', () => {
     await TestBed.configureTestingModule({
       imports: [Start],
       providers: [
+        provideRouter([]),
         {
           provide: ApiService,
           useValue: { lookupMember, sendPortalInvite, requestDuesLink },
@@ -207,12 +210,19 @@ describe('Start', () => {
         .find((b) => b.textContent?.includes('Pay dues'))!
         .click();
 
-    it('shows the under-13 message (no popup) when dues are current', async () => {
-      lookupMember.mockResolvedValue(found({ action: 'UNDER_AGE', duesCurrent: true }));
+    it('goes to the events page, carrying the session, when dues are current', async () => {
+      lookupMember.mockResolvedValue(
+        found({ action: 'UNDER_AGE', duesCurrent: true, lookupToken: 'signed-token' }),
+      );
+      const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
       const { el, submitBsa } = await setup();
       await submitBsa();
+
+      expect(navigate).toHaveBeenCalledWith('/events');
+      const session = TestBed.inject(MemberSession);
+      expect(session.lookupToken()).toBe('signed-token');
+      expect(session.firstName()).toBe('Pat');
       expect(el.querySelector('.modal')).toBeNull();
-      expect(el.querySelector('[role=alert]')?.textContent).toContain('13');
     });
 
     it('shows the dues popup when dues are behind', async () => {

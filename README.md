@@ -11,10 +11,11 @@ updated to the current Angular CLI. **No authentication** is configured — the 
 ```text
 amplify/                          # Amplify Gen2 backend (TypeScript, CDK under the hood)
 ├── backend.ts                    # defineBackend + IAM, signing secret, WAF rate limit, concurrency cap
-├── data/resource.ts              # AppSync schema: lookupMember, sendPortalInvite, requestDuesLink
+├── data/resource.ts              # AppSync schema: member lookup, invites, dues and event links
 └── functions/
-    └── registration-api/         # The Lambda behind all three operations
-        ├── handler.ts            # Member lookup, LodgeMaster invite / dues-link calls
+    └── registration-api/         # The Lambda behind every operation
+        ├── handler.ts            # Member lookup, LodgeMaster invite / dues / event-link calls
+        ├── events.ts             # Which events an under-13 member can register for
         ├── lookup-token.ts       # HMAC-signed lookup tokens
         ├── lodge-date.ts         # Age and dues-year rules, in the lodge time zone
         ├── roster.ts             # Cached name + birthdate index
@@ -25,7 +26,10 @@ src/                              # Angular app
 └── app/
     ├── api.service.ts            # Typed Amplify Data client wrapper
     ├── site-config.ts            # Shared constants (contact email)
-    └── pages/start/              # The registration start page and its popups
+    ├── member-session.ts         # In-memory lookup token shared between pages
+    └── pages/
+        ├── start/                # The registration start page and its popups
+        └── events/               # Upcoming events for under-13 members with current dues
 amplify.yml                       # Amplify Hosting build spec (backend + frontend)
 ```
 

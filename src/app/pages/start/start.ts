@@ -6,7 +6,9 @@ import {
   ReactiveFormsModule,
   Validators,
 } from '@angular/forms';
+import { Router } from '@angular/router';
 import { ApiService, type MemberLookup } from '../../api.service';
+import { MemberSession } from '../../member-session';
 import { CONTACT_EMAIL } from '../../site-config';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -38,6 +40,8 @@ type Dialog = 'active' | 'invite' | 'done' | 'dues';
 export class Start {
   private readonly fb = inject(NonNullableFormBuilder);
   private readonly api = inject(ApiService);
+  private readonly session = inject(MemberSession);
+  private readonly router = inject(Router, { optional: true });
 
   protected readonly contactEmail = CONTACT_EMAIL;
   protected readonly months = MONTHS.map((label, i) => ({ value: String(i + 1), label }));
@@ -143,6 +147,9 @@ export class Start {
             this.duesError.set(null);
             this.duesLink.set(null);
             this.dialog.set('dues');
+          } else if (result.duesCurrent === true && result.lookupToken) {
+            this.session.set(result.lookupToken, result.firstName);
+            await this.router?.navigateByUrl('/events');
           } else {
             this.notice.set(
               `Online portal accounts are available to members age 13 and older. Please email ${CONTACT_EMAIL} if you have questions.`,

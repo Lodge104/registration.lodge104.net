@@ -7,6 +7,13 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { DEFAULT_LODGE_TIMEZONE, ageOn, duesStatus } from './lodge-date';
+import {
+  type EligibleEvent,
+  type EventItem,
+  eligibleEvents,
+  isCandidate,
+  isEventEligible,
+} from './events';
 import { signLookupToken, verifyLookupToken } from './lookup-token';
 import { buildRosterIndex, createRosterCache, rosterKey, type RosterItem } from './roster';
 
@@ -43,6 +50,7 @@ import { buildRosterIndex, createRosterCache, rosterKey, type RosterItem } from 
 const {
   MEMBER_DATA_TABLE_NAME = 'lodge104-member_data',
   KEYS_TABLE_NAME = 'lodge104-keys',
+  EVENT_DATA_TABLE_NAME = 'lodge104-event_data',
   LODGEMASTER_BASE_URL = 'https://lodgemaster-client.oa-scouting.org',
   MIN_PORTAL_AGE = '13',
   DUES_TIMEZONE = DEFAULT_LODGE_TIMEZONE,
@@ -134,6 +142,20 @@ export interface InviteResult {
   expiresAt: string | null;
 }
 
+export interface EventListResult {
+  success: boolean;
+  message: string;
+  /** True when only Ordeal inductions are offered (the member is a candidate). */
+  candidate: boolean;
+  events: EligibleEvent[];
+}
+
+export interface EventLinkResult {
+  success: boolean;
+  message: string;
+  link: string | null;
+}
+
 interface MemberRecord {
   BsaPersonId: number;
   DuesYear: number;
@@ -143,6 +165,8 @@ interface MemberRecord {
   DateOfBirth?: string;
   PortalAccount?: string;
   EmailPrimaryAddress?: string | null;
+  Chapter?: string | null;
+  Level?: string | null;
 }
 
 interface LookupArgs {
@@ -161,7 +185,25 @@ interface DuesLinkArgs {
   lookupToken: string;
 }
 
-type FieldName = 'lookupMember' | 'sendPortalInvite' | 'requestDuesLink';
+interface EventListArgs {
+  lookupToken: string;
+}
+
+interface EventLinkArgs {
+  lookupToken: string;
+  eventId: string;
+}
+
+type OperationArgs = LookupArgs | InviteArgs | DuesLinkArgs | EventListArgs | EventLinkArgs;
+type OperationResult =
+  LookupResult | InviteResult | DuesLinkResult | EventListResult | EventLinkResult;
+
+type FieldName =
+  | 'lookupMember'
+  | 'sendPortalInvite'
+  | 'requestDuesLink'
+  | 'listEvents'
+  | 'requestEventRegistrationLink';
 
 /**
  * Amplify Data's generated resolver invokes the function with a flat payload
@@ -179,9 +221,7 @@ interface ResolverEvent<TArgs> {
 // Handler
 // ---------------------------------------------------------------------------
 
-export const handler = async (
-  event: ResolverEvent<LookupArgs | InviteArgs | DuesLinkArgs>,
-): Promise<LookupResult | InviteResult | DuesLinkResult> => {
+export const handler = async (event: ResolverEvent<OperationArgs>): Promise<OperationResult> => {
   const field = (event.fieldName ?? event.info?.fieldName) as FieldName | undefined;
   const args = event.arguments ?? {};
   switch (field) {
@@ -191,6 +231,10 @@ export const handler = async (
       return sendPortalInvite(args as InviteArgs);
     case 'requestDuesLink':
       return requestDuesLink(args as DuesLinkArgs);
+    case 'listEvents':
+      return listEvents(args as EventListArgs);
+    case 'requestEventRegistrationLink':
+      return requestEventRegistrationLink(args as EventLinkArgs);
     default:
       throw new Error(`Unsupported field: ${String(field)}`);
   }
@@ -446,6 +490,116 @@ export async function requestDuesLink(
   }
 
   return { success: true, message: 'Dues link created', link, bsaId: String(bsaPersonId) };
+}
+
+// ---------------------------------------------------------------------------
+// listEvents / requestEventRegistrationLink
+// ---------------------------------------------------------------------------
+
+/**
+ * An under-13 member whose dues are current, re-checked server-side from a
+ * signed lookup token. Both event operations are limited to exactly the case
+ * the UI offers them, since the registration link is specific to the member.
+ */
+async function eventEligibleMember(
+  lookupToken: string,
+  now: Date,
+): Promise<{ member: MemberRecord } | { message: string }> {
+  const bsaPersonId = verifyLookupToken(lookupToken, now, await getTokenKey());
+  if (bsaPersonId === null) {
+    return { message: 'Your session has expired. Please look yourself up again.' };
+  }
+  const records = await queryByBsaId(bsaPersonId);
+  if (records.length === 0) {
+    return { message: 'We could not find your member record. Please look yourself up again.' };
+  }
+  const member = latestRecord(records);
+  if (portalAction(member, now) !== 'UNDER_AGE') {
+    return { message: 'Event registration here is only for members under 13.' };
+  }
+  if (!duesStatus(member, now, DUES_TIMEZONE).current) {
+    return { message: 'Please pay your dues before registering for events.' };
+  }
+  return { member };
+}
+
+/** lodge104-event_data is small (~170 items), so a projected scan is fine. */
+async function loadEvents(): Promise<EventItem[]> {
+  const items: EventItem[] = [];
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const page = await ddb.send(
+      new ScanCommand({
+        TableName: EVENT_DATA_TABLE_NAME,
+        ProjectionExpression:
+          'id, #name, #type, chapter, eventLocation, startDateTime, endDateTime, isModernEvent, ' +
+          'isOnlineRegEnabled, isHiddenFromCalendar, isCalendarOnly, isOrdealInduction, ' +
+          'onlineRegStartDate, onlineRegEndDate',
+        ExpressionAttributeNames: { '#name': 'name', '#type': 'type' },
+        ExclusiveStartKey,
+      }),
+    );
+    items.push(...((page.Items ?? []) as EventItem[]));
+    ExclusiveStartKey = page.LastEvaluatedKey;
+  } while (ExclusiveStartKey);
+  return items;
+}
+
+export async function listEvents(args: EventListArgs, now = new Date()): Promise<EventListResult> {
+  const checked = await eventEligibleMember(args.lookupToken, now);
+  if ('message' in checked) {
+    return { success: false, message: checked.message, candidate: false, events: [] };
+  }
+  const { member } = checked;
+  const events = eligibleEvents(await loadEvents(), member, now, DUES_TIMEZONE);
+  return {
+    success: true,
+    message: events.length ? 'ok' : 'No events are open for registration right now.',
+    candidate: isCandidate(member),
+    events,
+  };
+}
+
+export async function requestEventRegistrationLink(
+  args: EventLinkArgs,
+  now = new Date(),
+): Promise<EventLinkResult> {
+  const linkFailure = (message: string): EventLinkResult => ({
+    success: false,
+    message,
+    link: null,
+  });
+  if (!sideEffectsEnabled) return linkFailure(SIDE_EFFECTS_DISABLED_MESSAGE);
+
+  const eventId = clean(args.eventId);
+  if (!/^\d{1,15}$/.test(eventId)) return linkFailure('That event could not be found.');
+
+  const checked = await eventEligibleMember(args.lookupToken, now);
+  if ('message' in checked) return linkFailure(checked.message);
+  const { member } = checked;
+
+  // Re-check this specific event against the same rules as the list, so a
+  // caller can't request a link for an event they aren't allowed to see.
+  const event = (await loadEvents()).find((e) => e.id === Number(eventId));
+  if (!event || !isEventEligible(event, member, now, DUES_TIMEZONE)) {
+    return linkFailure('Registration for that event is not open right now.');
+  }
+  if (!member.OalmId) return linkFailure('Your member record is missing a LodgeMaster ID.');
+
+  const response = await callLodgeMaster<{ link?: string }>(
+    'GET',
+    `/api/events/members/member/${encodeURIComponent(String(member.OalmId))}` +
+      `/event/${encodeURIComponent(eventId)}/registrationlink`,
+  );
+  const link = response.link ?? '';
+  if (!link.startsWith(`${DUES_LINK_ORIGIN}/`)) {
+    console.error('Unexpected event registration link from LodgeMaster', {
+      eventId,
+      hasLink: Boolean(link),
+    });
+    throw new Error('LodgeMaster did not return a registration link. Please try again later.');
+  }
+  return { success: true, message: 'Registration link created', link };
 }
 
 // ---------------------------------------------------------------------------
