@@ -29,7 +29,8 @@ describe('App', () => {
     expect(compiled.querySelector('header')?.textContent).toContain(
       'Occoneechee Lodge #104 Online Registration',
     );
-    expect(compiled.querySelector('a[href="mailto:registration@lodge104.com"]')).toBeTruthy();
+    expect(compiled.querySelector('a[href="mailto:registration@lodge104.net"]')).toBeTruthy();
+    expect(compiled.querySelector('a[href="mailto:registration@lodge104.com"]')).toBeNull();
     expect(
       compiled.querySelector('a[href="https://lodge104.net/registration/refunds/"]'),
     ).toBeTruthy();

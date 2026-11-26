@@ -9,18 +9,24 @@ updated to the current Angular CLI. **No authentication** is configured — the 
 ## Project layout
 
 ```text
-amplify/                     # Amplify Gen2 backend (TypeScript, CDK under the hood)
-├── backend.ts               # defineBackend({ data, ...functions })
-├── data/resource.ts         # AppSync schema: custom queries/mutations → Lambda resolvers
+amplify/                          # Amplify Gen2 backend (TypeScript, CDK under the hood)
+├── backend.ts                    # defineBackend + IAM, signing secret, WAF rate limit, concurrency cap
+├── data/resource.ts              # AppSync schema: lookupMember, sendPortalInvite, requestDuesLink
 └── functions/
-    └── say-hello/           # Sample Lambda (resource.ts + handler.ts)
-src/                         # Angular app
-├── main.ts                  # Amplify.configure(amplify_outputs.json)
-├── polyfills.ts             # Node globals required by Amplify JS
+    └── registration-api/         # The Lambda behind all three operations
+        ├── handler.ts            # Member lookup, LodgeMaster invite / dues-link calls
+        ├── lookup-token.ts       # HMAC-signed lookup tokens
+        ├── lodge-date.ts         # Age and dues-year rules, in the lodge time zone
+        ├── roster.ts             # Cached name + birthdate index
+        └── resource.ts           # defineFunction (runtime, timeout, env)
+src/                              # Angular app
+├── main.ts                       # Amplify.configure(amplify_outputs.json)
+├── polyfills.ts                  # Node globals required by Amplify JS
 └── app/
-    ├── api.service.ts       # Typed Amplify Data client wrapper
-    └── home/                # Sample page calling the Lambda
-amplify.yml                  # Amplify Hosting build spec (backend + frontend)
+    ├── api.service.ts            # Typed Amplify Data client wrapper
+    ├── site-config.ts            # Shared constants (contact email)
+    └── pages/start/              # The registration start page and its popups
+amplify.yml                       # Amplify Hosting build spec (backend + frontend)
 ```
 
 ## Local development
@@ -42,6 +48,26 @@ To develop against the deployed `main` backend instead of a sandbox:
 `npm run outputs`.
 
 Tear down your sandbox with `npm run sandbox:delete`.
+
+## Security and abuse controls
+
+The site has no login, so the AppSync API is public (API key). These controls limit abuse:
+
+- **Rate limit:** an AWS WAF rule blocks any IP making more than 100 API requests in 5 minutes.
+- **Concurrency cap:** the Lambda is limited to 10 concurrent executions, so a flood is throttled
+  instead of draining DynamoDB or hammering LodgeMaster.
+- **No scan per request:** name + birthdate lookups use a small in-memory index that each Lambda
+  container rebuilds from one projected scan at most every 5 minutes (`roster.ts`). Lookups by
+  member ID are direct key queries.
+- **Signed lookup tokens:** `sendPortalInvite` and `requestDuesLink` need the token returned by a
+  successful `lookupMember`. Tokens are HMAC-signed with a per-deployment secret (Secrets Manager)
+  and expire after 30 minutes, so they can't be forged for an arbitrary member.
+- **Sandboxes are read-only for side effects:** the function reads the live member and
+  session-cookie tables, so `npm run sandbox` can look members up, but sending invitations and
+  fetching dues links only work on Amplify Hosting branch deployments
+  (`SIDE_EFFECTS_ENABLED`, set in `amplify/backend.ts`).
+
+The API key is visible to anyone who loads the site; none of the above relies on keeping it secret.
 
 ## Adding a Lambda function
 

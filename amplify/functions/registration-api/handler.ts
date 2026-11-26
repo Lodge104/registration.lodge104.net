@@ -5,9 +5,13 @@ import {
   ScanCommand,
   type QueryCommandOutput,
 } from '@aws-sdk/lib-dynamodb';
+import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { DEFAULT_LODGE_TIMEZONE, ageOn, duesStatus } from './lodge-date';
+import { signLookupToken, verifyLookupToken } from './lookup-token';
+import { buildRosterIndex, createRosterCache, rosterKey, type RosterItem } from './roster';
 
 /*
- * Single Lambda behind two AppSync operations:
+ * Single Lambda behind three AppSync operations:
  *
  *   lookupMember(bsaId | firstName+lastName+birthDate)
  *     -> finds the member in lodge104-member_data and reports which portal
@@ -15,15 +19,24 @@ import {
  *        than throwing so the UI can show the right message.
  *
  *   sendPortalInvite(lookupToken, email)
- *     -> re-resolves the member server-side from the opaque lookupToken
+ *     -> verifies the signed lookupToken, re-resolves the member server-side
  *        (never trusts a client-supplied OalmId), then calls the LodgeMaster
  *        "account/add" (No Account) or "account/resendinvite" (Invitation
  *        Sent) endpoint with the session cookies from lodge104-keys.
  *
+ *   requestDuesLink(lookupToken)
+ *     -> same token check, for under-13 members whose dues are behind.
+ *
  * Security notes:
- *   - The API is public (API key), so responses expose only the minimum the
- *     UI needs: first name, a portal action, and the primary email (to
- *     pre-fill the confirmation popup, per requirements).
+ *   - The API is public (API key); abuse is limited by a WAF rate limit and a
+ *     Lambda concurrency cap (see amplify/backend.ts), not by this code.
+ *   - Follow-up calls need an HMAC-signed lookupToken (see lookup-token.ts), so
+ *     a caller cannot forge one for an arbitrary member.
+ *   - Operations with external side effects (LodgeMaster invites / dues links)
+ *     only run when SIDE_EFFECTS_ENABLED=true, which backend.ts sets for real
+ *     branch deployments only, never for personal sandboxes.
+ *   - Responses expose only what the UI needs: first name, a portal action, and
+ *     the primary email (to pre-fill the confirmation popup, per requirements).
  *   - Cookie values are never logged.
  */
 
@@ -32,14 +45,50 @@ const {
   KEYS_TABLE_NAME = 'lodge104-keys',
   LODGEMASTER_BASE_URL = 'https://lodgemaster-client.oa-scouting.org',
   MIN_PORTAL_AGE = '13',
-  DUES_TIMEZONE = 'America/New_York',
+  DUES_TIMEZONE = DEFAULT_LODGE_TIMEZONE,
   DUES_LINK_ORIGIN = 'https://members.oa-scouting.org',
+  LOOKUP_TOKEN_SECRET_ARN,
+  SIDE_EFFECTS_ENABLED,
+  ROSTER_CACHE_TTL_SECONDS = '300',
 } = process.env;
 
 const XSRF_TOKEN_COOKIE = 'XSRF-TOKEN';
-const LOOKUP_TOKEN_TTL_MS = 30 * 60 * 1000;
+
+/** Default-deny: only an explicit "true" (set by backend.ts) enables side effects. */
+const sideEffectsEnabled = SIDE_EFFECTS_ENABLED === 'true';
+const SIDE_EFFECTS_DISABLED_MESSAGE =
+  'This environment is read-only, so emails and payment links are disabled here.';
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+const secrets = new SecretsManagerClient({});
+
+// ---------------------------------------------------------------------------
+// Lookup-token signing key (Secrets Manager, created per deployment by backend.ts)
+// ---------------------------------------------------------------------------
+
+let tokenKey: Promise<Buffer> | undefined;
+
+function getTokenKey(): Promise<Buffer> {
+  tokenKey ??= loadTokenKey().catch((err: unknown) => {
+    tokenKey = undefined; // don't cache a failure
+    throw err;
+  });
+  return tokenKey;
+}
+
+async function loadTokenKey(): Promise<Buffer> {
+  if (!LOOKUP_TOKEN_SECRET_ARN) throw new Error('LOOKUP_TOKEN_SECRET_ARN is not configured');
+  const { SecretString } = await secrets.send(
+    new GetSecretValueCommand({ SecretId: LOOKUP_TOKEN_SECRET_ARN }),
+  );
+  if (!SecretString) throw new Error('The lookup token secret has no value');
+  return Buffer.from(SecretString, 'utf8');
+}
+
+/** Tests only: supply (or clear) the signing key instead of reading Secrets Manager. */
+export function setLookupTokenKeyForTesting(key: Buffer | undefined): void {
+  tokenKey = key ? Promise.resolve(key) : undefined;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -161,43 +210,18 @@ export async function lookupMember(args: LookupArgs, now = new Date()): Promise<
   const [bsaPersonId, records] = [...people.entries()][0];
   const member = latestRecord(records);
   const action = portalAction(member, now);
-  const dues = action === 'UNDER_AGE' ? duesStatus(member, now) : null;
+  const dues = action === 'UNDER_AGE' ? duesStatus(member, now, DUES_TIMEZONE) : null;
 
   return {
     status: 'FOUND',
     action,
     firstName: clean(member.FirstName) || null,
     email: clean(member.EmailPrimaryAddress) || null,
-    lookupToken: encodeLookupToken(bsaPersonId, now),
+    lookupToken: signLookupToken(bsaPersonId, now, await getTokenKey()),
     duesYear: dues?.duesYear ?? null,
     requiredDuesYear: dues?.requiredDuesYear ?? null,
     duesCurrent: dues?.current ?? null,
   };
-}
-
-/**
- * Dues are "current" when the member's latest DuesYear is at least the
- * required year: next year from Nov 1 through Dec 31 (when the lodge starts
- * collecting the following year's dues), otherwise this year.
- */
-export function requiredDuesYear(now: Date, timeZone = DUES_TIMEZONE): number {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: 'numeric',
-  }).formatToParts(now);
-  const year = Number(parts.find((p) => p.type === 'year')?.value);
-  const month = Number(parts.find((p) => p.type === 'month')?.value);
-  return month >= 11 ? year + 1 : year;
-}
-
-export function duesStatus(
-  member: Pick<MemberRecord, 'DuesYear'>,
-  now: Date,
-): { duesYear: number; requiredDuesYear: number; current: boolean } {
-  const required = requiredDuesYear(now);
-  const duesYear = Number(member.DuesYear) || 0;
-  return { duesYear, requiredDuesYear: required, current: duesYear >= required };
 }
 
 async function findMembers(args: LookupArgs): Promise<MemberRecord[]> {
@@ -207,13 +231,13 @@ async function findMembers(args: LookupArgs): Promise<MemberRecord[]> {
     return queryByBsaId(Number(bsaId));
   }
 
-  const firstName = normalizeName(args.firstName);
-  const lastName = normalizeName(args.lastName);
+  const firstName = clean(args.firstName);
+  const lastName = clean(args.lastName);
   const birthDate = clean(args.birthDate);
   if (!firstName || !lastName || !birthDate || !/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) {
     return [];
   }
-  return scanByNameAndBirthDate(firstName, lastName, birthDate);
+  return findByNameAndBirthdate(firstName, lastName, birthDate);
 }
 
 async function queryByBsaId(bsaPersonId: number): Promise<MemberRecord[]> {
@@ -235,41 +259,42 @@ async function queryByBsaId(bsaPersonId: number): Promise<MemberRecord[]> {
 }
 
 /**
- * The table is keyed on BsaPersonId only, so a name + birthdate lookup is a
- * filtered scan (~10k items / ~14 MB today, a few pages). The birthdate is the
- * server-side filter (DateOfBirth is stored as "YYYY-MM-DDT00:00:00Z"); names
- * are then compared case/whitespace-insensitively in code, since ~1% of
- * stored names have stray whitespace or are all-caps.
+ * The table is keyed on BsaPersonId only (and is owned by another stack, so we
+ * don't add an index to it). Name + birthdate lookups therefore use a small
+ * in-memory index of who-matches-what, rebuilt from one projected scan at most
+ * every ROSTER_CACHE_TTL_SECONDS per Lambda container (see roster.ts) instead
+ * of scanning the table on every public request. The matched member's record
+ * is then read live by ID, so portal status and dues are never stale.
  */
-async function scanByNameAndBirthDate(
-  firstName: string,
-  lastName: string,
-  birthDate: string,
-): Promise<MemberRecord[]> {
-  const items: MemberRecord[] = [];
+const getRoster = createRosterCache(loadRoster, Number(ROSTER_CACHE_TTL_SECONDS) * 1000);
+
+async function loadRoster() {
+  const items: RosterItem[] = [];
   let ExclusiveStartKey: Record<string, unknown> | undefined;
   do {
     const page = await ddb.send(
       new ScanCommand({
         TableName: MEMBER_DATA_TABLE_NAME,
-        FilterExpression: 'DateOfBirth = :dob',
-        ExpressionAttributeValues: { ':dob': `${birthDate}T00:00:00Z` },
-        ProjectionExpression:
-          'BsaPersonId, DuesYear, OalmId, FirstName, LastName, DateOfBirth, PortalAccount, EmailPrimaryAddress',
+        ProjectionExpression: 'BsaPersonId, FirstName, LastName, DateOfBirth',
         ExclusiveStartKey,
       }),
     );
-    for (const item of (page.Items ?? []) as MemberRecord[]) {
-      if (
-        normalizeName(item.FirstName) === firstName &&
-        normalizeName(item.LastName) === lastName
-      ) {
-        items.push(item);
-      }
-    }
+    items.push(...((page.Items ?? []) as RosterItem[]));
     ExclusiveStartKey = page.LastEvaluatedKey;
   } while (ExclusiveStartKey);
-  return items;
+  return buildRosterIndex(items);
+}
+
+async function findByNameAndBirthdate(
+  firstName: string,
+  lastName: string,
+  birthDate: string,
+): Promise<MemberRecord[]> {
+  const ids = (await getRoster()).get(rosterKey(firstName, lastName, birthDate));
+  if (!ids) return [];
+  // Two people is already "ambiguous"; never fan out further than that.
+  const found = await Promise.all([...ids].slice(0, 2).map(queryByBsaId));
+  return found.flat();
 }
 
 /** A member has one item per dues year; collapse to one entry per person. */
@@ -292,7 +317,7 @@ function latestRecord(records: MemberRecord[]): MemberRecord {
 }
 
 export function portalAction(member: MemberRecord, now: Date): PortalAction {
-  const age = ageOn(member.DateOfBirth, now);
+  const age = ageOn(member.DateOfBirth, now, DUES_TIMEZONE);
   if (age === null || age < Number(MIN_PORTAL_AGE)) return 'UNDER_AGE';
 
   switch (clean(member.PortalAccount)) {
@@ -305,18 +330,6 @@ export function portalAction(member: MemberRecord, now: Date): PortalAction {
     default:
       return 'UNKNOWN';
   }
-}
-
-/** Whole years between an ISO birthdate and `now` (UTC), or null if unparsable. */
-export function ageOn(dateOfBirth: string | undefined, now: Date): number | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateOfBirth ?? '');
-  if (!m) return null;
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  let age = now.getUTCFullYear() - y;
-  const beforeBirthday =
-    now.getUTCMonth() + 1 < mo || (now.getUTCMonth() + 1 === mo && now.getUTCDate() < d);
-  if (beforeBirthday) age -= 1;
-  return age;
 }
 
 function notFound(status: Exclude<LookupStatus, 'FOUND'>): LookupResult {
@@ -337,12 +350,14 @@ function notFound(status: Exclude<LookupStatus, 'FOUND'>): LookupResult {
 // ---------------------------------------------------------------------------
 
 export async function sendPortalInvite(args: InviteArgs, now = new Date()): Promise<InviteResult> {
+  if (!sideEffectsEnabled) return failure(SIDE_EFFECTS_DISABLED_MESSAGE);
+
   const email = clean(args.email).toLowerCase();
   if (!isValidEmail(email)) {
     return failure('Please enter a valid email address.');
   }
 
-  const bsaPersonId = decodeLookupToken(args.lookupToken, now);
+  const bsaPersonId = verifyLookupToken(args.lookupToken, now, await getTokenKey());
   if (bsaPersonId === null) {
     return failure('Your session has expired. Please look yourself up again.');
   }
@@ -401,7 +416,9 @@ export async function requestDuesLink(
     bsaId: null,
   });
 
-  const bsaPersonId = decodeLookupToken(args.lookupToken, now);
+  if (!sideEffectsEnabled) return duesFailure(SIDE_EFFECTS_DISABLED_MESSAGE);
+
+  const bsaPersonId = verifyLookupToken(args.lookupToken, now, await getTokenKey());
   if (bsaPersonId === null) {
     return duesFailure('Your session has expired. Please look yourself up again.');
   }
@@ -411,7 +428,7 @@ export async function requestDuesLink(
     return duesFailure('We could not find your member record. Please look yourself up again.');
   }
   const member = latestRecord(records);
-  if (portalAction(member, now) !== 'UNDER_AGE' || duesStatus(member, now).current) {
+  if (portalAction(member, now) !== 'UNDER_AGE' || duesStatus(member, now, DUES_TIMEZONE).current) {
     return duesFailure('Your dues are already up to date.');
   }
   if (!member.OalmId) {
@@ -525,42 +542,11 @@ async function callLodgeMaster<T>(
 }
 
 // ---------------------------------------------------------------------------
-// Lookup token
-//
-// A short-lived, opaque reference to the matched member so the client never
-// has to send (or learn) an internal ID. It is NOT a security boundary — the
-// BSA ID is already something the user typed — it only binds the follow-up
-// call to a recent lookup and lets the server re-check eligibility.
-// ---------------------------------------------------------------------------
-
-export function encodeLookupToken(bsaPersonId: number, now: Date): string {
-  return Buffer.from(JSON.stringify({ b: bsaPersonId, t: now.getTime() })).toString('base64url');
-}
-
-export function decodeLookupToken(token: string | undefined, now: Date): number | null {
-  try {
-    const { b, t } = JSON.parse(Buffer.from(token ?? '', 'base64url').toString('utf8')) as {
-      b: unknown;
-      t: unknown;
-    };
-    if (typeof b !== 'number' || !Number.isInteger(b) || typeof t !== 'number') return null;
-    if (now.getTime() - t > LOOKUP_TOKEN_TTL_MS || t > now.getTime() + 60_000) return null;
-    return b;
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function clean(value: string | null | undefined): string {
   return (value ?? '').trim();
-}
-
-function normalizeName(value: string | null | undefined): string {
-  return clean(value).replace(/\s+/g, ' ').toLowerCase();
 }
 
 function isValidEmail(email: string): boolean {

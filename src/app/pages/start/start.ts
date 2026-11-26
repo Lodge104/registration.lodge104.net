@@ -7,6 +7,7 @@ import {
   Validators,
 } from '@angular/forms';
 import { ApiService, type MemberLookup } from '../../api.service';
+import { CONTACT_EMAIL } from '../../site-config';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -17,7 +18,6 @@ const MIN_AGE_OFFSET = 12;
 
 export const PORTAL_URL = 'https://portal.oa-scouting.org/';
 export const SUPPORT_URL = 'https://support.lodge104.net';
-export const CONTACT_EMAIL = 'registration@lodge104.net';
 
 /**
  * sessionStorage key used to re-fill the page after opening the dues payment
